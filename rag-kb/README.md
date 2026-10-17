@@ -36,13 +36,14 @@ MCP 端点 `http://localhost:8000/sse` 可建立 SSE 连接。
 > `curl.exe`；且 PowerShell 5.1 默认 GBK 编码会把请求体里的中文变成乱码字节（表现为"检索全不命中"的
 > 假象）——先执行 `chcp 65001`，或把 JSON 存成 UTF-8 文件后用 `--data-binary "@req.json"` 发送。
 
-> ⚠️ **重启即清空（当前架构的硬纪律）**：向量库/BM25/ChunkStore 均为内存实现，**每次重启服务后必须
-> 重新 ingest 再查询/评测**，否则全量表现为拒答或 RETRIEVAL_MISS 假象。另：修复 ING-02（幂等入库）前，
-> 重复 ingest 同一文档会翻倍语料，重灌前先 `POST /api/ingest/reset`。
+> ⚠️ **存储与重启纪律（两种模式）**：默认 `rag.chunk-store.type=memory` 下向量库(除非切 Milvus)/BM25/ChunkStore 均为内存实现，
+> **重启后必须重新 ingest**；切 **postgres 模式**（`--rag.chunk-store.type=postgres`，见“持久化部署”一节）后 chunk 语料落库，
+> 启动时 warmup 自动重建 BM25，**重启不再需要重灌**（DAT-01 已根治）。
+> 入库已幂等（ING-02 确定性 chunk id + 按 source 删旧）：重灌同一文档不会翻倍语料，无需先 reset。
 
 ```powershell
 # 3. 入库 → 问答 → 评测（评测机：异步 run + 错题重跑 + diff，详见 docs/评测机增强实施方案.md）
-curl.exe -X POST localhost:8000/api/ingest   -H "Content-Type: application/json" -d '{\"path\":\"data/docs/attendance_policy.md\"}'
+curl.exe -X POST localhost:8000/api/ingest   -H "Content-Type: application/json" -d '{\"path\":\"data/docs\"}'   # 支持目录：递归批量入库（pdf/txt/md）
 curl.exe -X POST localhost:8000/api/query    -H "Content-Type: application/json" -d '{\"question\":\"入职满3年的员工有几天年假？\"}'
 curl.exe -X POST localhost:8000/api/eval/dataset/validate                          # SOP① 锚点校验
 curl.exe -X POST localhost:8000/api/eval/runs -H "Content-Type: application/json" -d '{\"tag\":\"baseline\"}'  # 返回 runId，后台跑
@@ -66,10 +67,13 @@ Markdown 报告由 `GET /api/eval/runs/{runId}/report` 从 JSONL 渲染——这
 | `EVAL_JUDGE_API_KEY` / `EVAL_JUDGE_BASE_URL` | rag.eval.judge.* | 回落主配置 | 裁判用另一家平台时 |
 | `RERANK_URL` | rag.rerank.base-url | `http://localhost:8080/rerank` | 配合 `rag.rerank.enabled=true` 接托管 rerank API |
 | `MILVUS_HOST` / `MILVUS_PORT` | vectorstore.milvus.client.* | `localhost` / `19530` | 切 Milvus |
+| `CHUNK_STORE_TYPE` | rag.chunk-store.type | `memory` | `postgres` → chunk 语料落库，重启不丢（见“持久化部署”） |
+| `PG_URL` / `PG_USER` / `PG_PASSWORD` | rag.postgres.* | `jdbc:postgresql://localhost:5432/ragkb` / `postgres` / `postgres` | 仅 postgres 模式生效 |
 
 | 配置键（application.yml） | 默认 | 说明 |
 |---|---|---|
 | `rag.vectorstore.simple` | `true` | `false` + `-Pmilvus` → Milvus |
+| `rag.chunk-store.type` | `memory` | `postgres` → ChunkStore 落 Postgres（表启动自动建，JdbcTemplate upsert）；向量始终在向量库，PG 只存检索单元原文+父子关系 |
 | `rag.chunk.strategy` | `recursive` | `fixed` / `recursive` / `parent-child`，单变量实验开关 |
 | `rag.retrieval.top-n` / `final-k` | 20 / 5 | 每路召回数 / 喂 LLM 的上下文块数 |
 | `rag.retrieval.hybrid` | `true` | `false` → 纯向量对照组 |
@@ -124,7 +128,7 @@ Markdown 报告由 `GET /api/eval/runs/{runId}/report` 从 JSONL 渲染——这
 ## 验证与测试
 
 ```powershell
-mvn -pl rag-kb test          # 29 个单元/契约测试（切块/BM25+RRF/评测存档/失败归因/MCP 工具契约）
+mvn -pl rag-kb test          # 33 个单元/契约测试（切块含确定性id/BM25+RRF/入库幂等与目录批量/评测存档/失败归因/MCP 工具契约）
 pwsh scripts/mcp-probe.ps1   # MCP 最小客户端演练：SSE 握手→initialize→tools/list→tools/call
 ```
 
@@ -348,22 +352,47 @@ idf(t)     = ln(1 + (N - df + 0.5) / (df + 0.5))
 | `web` | 端点含纯检索调试（可传 evidence 参数看命中标记） | 归因分析方法论 |
 | `mcp` | @Tool 包装 Service 为 MCP 工具（REST/MCP 双传输同一实现） | Agent 生态接入、HITL 工具设计 |
 
-## 切到 Milvus（第 3 周）
+## 切到 Milvus（向量持久化）
+
+前提：本机已有运行中的 Milvus standalone（`localhost:19530`，需同时跑 etcd/minio；仓库不再内置 compose 文件，容器自行管理）。
 
 ```bash
-docker compose up -d               # 需要 Docker
 mvn -Pmilvus spring-boot:run -Dspring-boot.run.arguments=--rag.vectorstore.simple=false
 ```
 
 切换前逐条核对（都是会静默改变评测结论的坑）：
 
 1. ⚠️ **维度对齐**：`text-embedding-v3` 默认输出 **1024 维**，Spring AI Milvus starter 建 collection 默认
-   **1536 维**——须设 `spring.ai.vectorstore.milvus.embeddingDimensions: 1024`，否则首次入库 dimension mismatch
+   **1536 维**——须设 `spring.ai.vectorstore.milvus.embedding-dimension: 1024`（注意是单数，已在 application.yml 配好），
+   否则首次入库 dimension mismatch
 2. **profile 是编译期行为**：命令行 `-Pmilvus` 自带重编译；IDEA 需勾选 milvus profile 并 Reload，
    否则 `simple=false` 时找不到 VectorStore Bean 启动失败
-3. **重启纪律不 relaxation**：切 Milvus 后仅向量持久化，`ChunkStore`/BM25 仍为内存——重启后融合候选
-   静默为空、系统假"低分拒答"（详见 `docs/rag-kb企业级问题排查清单.md` DAT-01），warmup 实现前照旧全量重灌
+3. **重启纪律**：仅切 Milvus 时只有向量持久化，ChunkStore/BM25 仍为内存——请连带启用下节的 postgres 模式，
+   否则重启后融合候选静默为空（DAT-01，warmup 已实现，见下节）
 4. 换 embedding 模型 = 换向量空间，必须换 `collectionName` 或清库重灌
+
+## 持久化部署（ChunkStore 落 Postgres，DAT-01 根治）
+
+背景：切 Milvus 后向量虽持久，但 `ChunkStore`（BM25 语料 + 融合后回取原文）仍是内存——
+重启后向量召回正常、融合候选却全空，系统表现为"低分拒答"的静默退化。解法是三层各司其职：
+
+| 存储 | 内容 | 持久性 |
+|---|---|---|
+| Milvus | 向量 + 轻量 metadata | ✅ collection 落盘 |
+| Postgres `chunk` 表 | 检索单元原文 + 父子关系（metadata JSON 列） | ✅ 启动自动建表（幂等 IF NOT EXISTS） |
+| BM25 索引 | 进程内倒排 | 重启时由 `StoreWarmupRunner` 从 ChunkStore 自动重建 |
+
+```powershell
+# 前提：Postgres 实例就绪（库需存在，表由应用启动时自建）。用 pgvector 镜像亦可。
+docker start postgres   # 或你自己的实例，用 PG_URL/PG_USER/PG_PASSWORD 覆盖
+mvn -Pmilvus spring-boot:run "-Dspring-boot.run.arguments=--rag.vectorstore.simple=false --rag.chunk-store.type=postgres"
+```
+
+启动日志看到 `BM25 warmup 完成: backend=postgres, chunks=N（混合检索重启即恢复，无需重新入库）`即生效；
+配合幂等入库（确定性 chunk id + 写前按 source 删旧），重跑/重启/重灌任意顺序都不会语料翻倍。
+面试可讲的 trade-off：用 `DriverManagerDataSource` 无连接池（读写只在入库/warmup，非在线高频路径）、
+不用 Flyway（单表幂等建表替代）、metadata 存 JSON 文本列而非拆 parent 表——都是"落库演进第一步"的克制取舍，
+上量时的演进方向（连接池/表规范化/ES 倒排）在排查清单里挂账。
 
 ## 项目结构
 
@@ -374,8 +403,7 @@ rag-kb/
 │   └── eval/            # 评测集：qa_v2/qa_v2.json（36 题，含 held-out 与对抗题）+ judge-errors.md
 ├── output/eval-runs/    # 每次评测 run 的 JSONL 存档（自动生成，报告由此渲染）
 ├── docs/                # 12周执行计划 / 评测机实施方案 / MCP 面试考点 / 环境清单 / 企业级排查清单
-├── scripts/mcp-probe.ps1# MCP 端到端探针
-└── docker-compose.yml   # Milvus standalone（可选，rerank 服务已注释备用）
+└── scripts/mcp-probe.ps1# MCP 端到端探针
 ```
 
 ## 实验记录规范
@@ -386,10 +414,10 @@ rag-kb/
 
 ## 已知局限（Local-first 学习系统的诚实边界）
 
-- **无鉴权**：REST 与 MCP 端点均匿名可调，ingest 接受任意本机路径——定位为本地学习环境；
+- **存储模式二选一**：默认全内存（重启即失、clone 即跑）；postgres 模式 chunk 落库 + warmup 重建 BM25（DAT-01 已根治）。
+  无鉴权：REST 与 MCP 端点均匿名可调，ingest 接受任意本机路径——定位为本地学习环境，
   生产化路径见排查清单 SEC-01/02（base-dir 白名单 + API-key filter）
-- **全内存存储**：向量/BM25/ChunkStore 重启即失，生产应落 Milvus + Postgres（清单 DAT-01）
-- **ingest 非幂等**（清单 ING-02）、**kb_ingest 目录支持未实现**（清单 ING-01，当前只接受单文件路径）
+- ~~ingest 非幂等、kb_ingest 目录支持未实现~~ 已修复（ING-01 目录批量入库 / ING-02 确定性 id + 按 source 删旧，均有单测）
 - **评测单 run 串行**：单线程 executor，千级 case 内是正确成本（方案 §0"不做清单"），万级需并发+限流
 - **解析天花板**：txt/md/pdf 文本层；表格 PDF/扫描件（tabula/OCR）在未做清单内（下方 TODO）
 - **在线延迟口径**：`/api/query` 的 elapsedMs 暂不含检索段（清单 QA-01，修复前两套数字不要混用）
@@ -399,18 +427,19 @@ rag-kb/
 | 现象 | 原因与解法 |
 |---|---|
 | 启动正常，一查询就报 401/invalid api key | `sk-not-configured` 占位值不阻启动、**首次调用才炸**——检查 `AI_API_KEY` 是否在当前会话设置 |
-| 所有问题都返回"无法回答" | ① 服务重启后没重新 ingest（内存库已清空）；② `min-vector-similarity` 阈值过高；先用 `/api/retrieve` 看三路分数 |
+| 所有问题都返回"无法回答" | ① 内存模式下服务重启后没重新 ingest；postgres 模式查 warmup 日志 chunks 是否为 0；② `min-vector-similarity` 阈值过高；先用 `/api/retrieve` 看三路分数 |
 | 中文查询莫名不命中、分数极低 | PowerShell GBK 编码把请求体打成了乱码字节——`chcp 65001` 或 `--data-binary "@req.json"` |
-| 评测分数比上一轮莫名下降 | 检查是否重复 ingest 导致语料翻倍（ING-02），先 `/api/ingest/reset` 再单文件重灌 |
+| 评测分数比上一轮莫名下降 | 先查 warmup 日志 BM25 是否空（内存模式重启未重灌）；语料翻倍已不可能（ING-02 幂等已修），再看三路分数归因 |
 | 切 Milvus 后启动失败 | Maven profile 没生效（IDEA 未勾选/未 Reload）或维度未对齐（见"切到 Milvus"第 1 条） |
+| postgres 模式启动报连不上库 | Postgres 实例/库不存在（表会自建、库不会）；检查 PG_URL 与容器状态 |
 | 评测中途要改配置重跑 | run 由守护线程执行、无优雅停机——kill 后用 `{"resumeRunId":"…"}` 断点续跑 |
 
 ## TODO（学习路线附带任务，编号关联 docs/rag-kb企业级问题排查清单.md）
 
-- [ ] 🔴 修 ING-01/ING-02/QA-01 三个 P0（入库目录支持 / 幂等 ingest / 延迟口径统一）
+- [ ] 🔴 修 QA-01（延迟口径统一）——ING-01/ING-02 已完成 ✅
 - [ ] 表格 PDF / 扫描件解析（tabula / OCR，见 `DocumentParserService` 注释）
 - [ ] 语义切块（embedding 相似度断句）对比实验
-- [ ] ChunkStore 落库（Postgres）+ 启动 warmup（DAT-01）；十万级演进路线见 `docs/评测机增强实施方案.md` §8
+- [x] ChunkStore 落库（Postgres）+ 启动 warmup（DAT-01 已根治，见"持久化部署"节）；十万级演进路线见 `docs/评测机增强实施方案.md` §8
 - [ ] 评测集扩到 100 条（反向出题法，见 `QaCase` 注释；现 36 题：主集 26 + held-out 10，含 10 道对抗题）
 - [ ] RAGAS 指标对照：用 Python RAGAS 跑同一测试集，校准自建 Judge
 - [ ] MCP 传输切 Streamable HTTP（SSE 已被规范废弃，PRO-01）；ChatClient/ChatMemory 化（AGT-01/02）

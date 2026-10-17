@@ -28,19 +28,21 @@
 
 ## A. P0 功能缺陷（测试时必踩）
 
-### 🔴 ING-01 · ingest 不支持目录，与对外契约不符
+### 🔴 ING-01 · ingest 不支持目录，与对外契约不符 —— ✅ 已修（2026-10-17）
 - **位置**：`ingest/DocumentParserService.parseToText()` 只认 `.pdf/.txt/.md` 单文件后缀；但 `mcp/RagKbTools.kb_ingest` 的 description 与 README 快速开始均宣称"单个文件或目录"
 - **现象**：传 `data/docs` 直接抛 `暂不支持的格式: data/docs`；对 Agent 而言是工具描述撒谎，会导致编排失败
 - **修复**：`IngestService.ingest()` 增加 `Files.isDirectory` 分支 → `Files.walk` 过滤受支持后缀逐个解析合并；或先改 description/README 与实现对齐
-- [ ] 待处理
+- **修复实现**：`IngestService.ingest()` 目录分支（白名单过滤 `DocumentParserService.isSupported`、排序保证稳定、BM25 收尾只重建一次）+ 空目录 fast-fail；单测 `IngestServiceTest` 覆盖；端到端实测 `data/docs` 一次灌 3 文件 5 块
+- [x] 已完成
 
-### 🔴 ING-02 · 重复 ingest 同一文档 = 语料翻倍（无幂等）
+### 🔴 ING-02 · 重复 ingest 同一文档 = 语料翻倍（无幂等） —— ✅ 已修（2026-10-17）
 - **位置**：三种切块器均用 `UUID.randomUUID()` 作 chunk id（`FixedSizeChunker:40`、`RecursiveCharacterChunker:42,48`、`ParentChildChunker:60,70`）；`IngestService.ingest()` 写入前不清理同 source 旧块
 - **现象**：同一文档 ingest 两次 → 向量库/BM25/ChunkStore 三份重复（含评测中途重启再入库）→ 引用重复、BM25 词频/文档长度统计失真、评测数字不可信
 - **修复**（企业数据管道底线是幂等）：
   1. chunk id 改确定性生成：`UUID.nameUUIDFromBytes((source + ":" + index + ":" + content).bytes)` 或 `sha256(source+index+content)` 前 16 位
   2. ingest 前按 metadata `source == 文件名` 先 `vectorStore.delete(旧ids)` + `chunkStore.removeByIds` + BM25 重建（deleteBySource）
-- [ ] 待处理
+- **修复实现**：`Chunk.stableId(source, index, content)`（`UUID.nameUUIDFromBytes`，MD5-based 跨 JVM 稳定）三切块器统一接入；`ChunkStore.removeBySource` 新增接口方法，`IngestService.ingestFile` 写前删旧→向量库同批旧 id 回删；单测：`ChunkingTest.chunkIds_areDeterministicAcrossInvocations` + `IngestServiceTest` 重灌不翻倍；端到端实测：双灌 data/docs 后 PG 与 Milvus 均恒 5 条
+- [x] 已完成
 
 ### 🔴 QA-01 · 在线链路延迟口径不一致（elapsedMs 不含检索）
 - **位置**：`qa/QaService.answer(String)` 第 48 行：`retrieve()` 在进入计时方法**之前**执行，`answer(question, chunks)` 里的 `start` 只圈住生成段
@@ -109,14 +111,15 @@
 
 ### B4. 数据持久化与生命周期（DAT）
 
-#### 🟠 DAT-01 · 三处内存态，重启全丢且无恢复入口
+#### 🟠 DAT-01 · 三处内存态，重启全丢且无恢复入口 —— ✅ 已修（2026-10-17，采纳目标 3 的 Postgres 方案并额外交付 warmup）
 - **现状**：`ChunkStore`(ConcurrentHashMap)、`SimpleVectorStore`（starter 版支持 `save(File)/load(File)` 未使用）、`Bm25Index`（重启即空）
 - **连锁风险（切 Milvus 时的隐形炸弹）**：`HybridRetrievalService:76-79` 中 `chunkStore.get()` 返回 null 时**静默 continue**——Milvus profile 下重启服务，向量召回有结果但 ChunkStore 为空 → 融合候选为空 → 系统表现为纯向量拒答/低分，**评测分数莫名下降且归因系统查不出原因**
 - **目标**：
   1. 内存版：`SimpleVectorStore.save/load` 挂 `ApplicationReadyEvent`/`@PreDestroy`
   2. 启动时 ChunkStore 为空而向量库非空 → WARN + 提供 `POST /api/ingest/reindex`（从向量库全量回灌 BM25/ChunkStore）
   3. 生产叙事：落 Postgres（chunk 元数据表 + BM25 换 ES/Lucene），README TODO 已有此项，把它升级为讲得出的迁移方案
-- [ ] 待处理
+- **修复实现**（按目标 3 落地，优于原计划的 1/2 过渡方案）：`ChunkStore` 接口化 + `@ConditionalOnProperty(rag.chunk-store.type)` 双实现（memory 默认零基建 / postgres 落库：chunk 表启动幂等建表，ON CONFLICT upsert）；`StoreWarmupRunner` 监听 `ApplicationReadyEvent` 从 ChunkStore 重建 BM25，postgres 模式下重启混合检索无损恢复；内存模式保留原纪律（重启重灌），但 warmup 日志会明示语料为空需入库，不再静默退化。端到端实测：重启后 `backend=postgres, chunks=5`，`/api/retrieve` bm25Score>0
+- [x] 已完成（遗留：SimpleVectorStore 文件持久化不再需要——生产路径已指向 Milvus+PG；BM25 换 ES 仍按触发条件演进）
 
 #### 🟡 DAT-02 · 无文档台账（doc registry）
 - **现状**：已入库了哪些文档、各自 hash/时间/chunk 数无处可查；`reset` 只能全清
@@ -249,16 +252,16 @@
 
 | 批次 | 项 | 预估 | 时点 |
 |---|---|---|---|
-| ① 测试前 | ING-01、ING-02、QA-01 | ~2h | 今天 |
-| ② 本周 | TST-01(至少 contextLoads+ingest 回归)、DAT-01(启动 warmup)、CFG-01 | ~1 天 | 切 Milvus 前必须完成 DAT-01 |
+| ① 测试前 | ING-01 ✅、ING-02 ✅、QA-01 | ~2h | ING-01/02 已完成（含单测+端到端实测），剩 QA-01 |
+| ② 本周 | TST-01(至少 contextLoads+ingest 回归 ✅ ingest 已有单测)、DAT-01 ✅(启动 warmup+ChunkStore 落 PG 已根治)、CFG-01 | ~ 天 | DAT-01 已提前完成 |
 | ③ 第 4 周 M1 收尾 | OBS-01、RES-01、RES-02、SEC-01、TST-02、PRO-01、README/D7 | ~1.5 天 | 挂 GitHub 前 |
 | ④ 与阶段 2 合并做 | AGT-01、AGT-02、API-02、PRO-02（工单 Agent 顺势作为 MCP Client 消费方）、AGT-03 | 融入第 5-7 周 | ChatClient/ChatMemory 是工单 Agent 的必经之路，一次投入两处收益 |
 | ⑤ 话术层（不实现） | SEC-03、SCA-01/02、DAT-02/03、AGT-04 | 笔记 | 第 11-12 周系统设计准备 |
 
-## F. 启动测试注意事项（修完 P0 前按此绕行）
+## F. 启动测试注意事项（2026-10-17 更新：ING-01/02 与 DAT-01 已修复，原绕行条款废弃）
 
 1. 环境变量四件套：`AI_API_KEY` / `AI_BASE_URL` / `AI_CHAT_MODEL` / `AI_EMBED_MODEL`；建议另设 `EVAL_JUDGE_MODEL` 独立裁判（否则启动 WARN self-preference，且见 D2）
-2. **ING-02 修复前**：每次 ingest 先 `POST /api/ingest/reset`，再逐文件（非目录）入库——否则重复语料污染评测
-3. **每次重启服务 = 全内存清空**，必须重新 ingest 再评测，否则全量 RETRIEVAL_MISS 假象
+2. ~~ING-02 修复前：每次 ingest 先 reset~~ 已幂等：确定性 chunk id + 写前按 source 删旧，重灌任意次数不翻倍（有单测锁行为）
+3. **内存模式：每次重启服务 = 全内存清空**，需重新 ingest；**postgres 模式（`--rag.chunk-store.type=postgres` + Milvus）：重启后 warmup 自动从库重建 BM25，无需重灌**（DAT-01 已根治，启动日志看 `BM25 warmup 完成: backend=postgres, chunks=N` 核对）
 4. 顺序：`/api/eval/dataset/validate`（SOP①）→ smoke run（20 题验方向）→ 全量 baseline → 单变量实验 + diff
 5. 在线延迟与评测延迟当前口径不同（QA-01），记录数字时注明来源
