@@ -32,14 +32,20 @@ spring:
           kb_retrieve 做纯检索归因（不消耗生成 token），
           eval_* 系列工具驱动评测机（跑批/进度/报告/错题本 diff），
           judge_error_record 仅供人工复核后记录裁判误判（人在回路）。
-    # 切 Milvus 时（-Pmilvus 且 rag.vectorstore.simple=false）按需调整：
+    # 切 Milvus 时（-Pmilvus 且 rag.vectorstore.simple=false）的配置：
     vectorstore:
       milvus:
         client:
           host: ${MILVUS_HOST:localhost}
           port: ${MILVUS_PORT:19530}
+          # 本地 standalone 未开鉴权，默认 root/milvus 即可连；生产启用 TLS+鉴权时补 secure/证书配置
         databaseName: default
-        collectionName: rag_kb
+        collectionName: rag_kb            # 换 embedding 模型=换向量空间，必须换 collection 名或清库重灌
+        embedding-dimension: 1024         # ⚠️ 必须显式对齐：starter 默认 1536(OpenAI)，text-embedding-v3 输出 1024；
+                                          # 不对齐首次入库即 dimension mismatch 且 collection 建坏需 drop 重建
+        initialize-schema: true           # 启动时自动建 collection+索引（生产已有 schema 时可关，交由 DBA 管理）
+        metric-type: cosine               # 与内存库 SimpleVectorStore 同语义，min-vector-similarity=0.30 阈值可直接沿用
+        index-type: IVF_FLAT              # 千级 chunk 够用；十万级+建议 HNSW（需重建 collection）
 
 server:
   port: 8000
