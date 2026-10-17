@@ -37,7 +37,7 @@ public class StoreWarmupRunner {
         int n = chunkStore.size();
         bm25Index.rebuildFrom(chunkStore);
         log.info("BM25 warmup 完成: backend={}, chunks={}{}", chunkStore.backend(), n,
-                n == 0 ? "（语料为空——调用 /api/ingest 或 kb_ingest 入库后混合检索才可用）"
-                        : "（混合检索重启即恢复，无需重新入库）");
+                (n == 0 ? "（语料为空——调用 /api/ingest 或 kb_ingest 入库后混合检索才可用）"
+                        : "（混合检索重启即恢复，无需重新入库）"));
     }
 }

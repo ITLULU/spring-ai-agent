@@ -62,8 +62,8 @@ rag:
     type: ${CHUNK_STORE_TYPE:memory}   # memory（默认，重启即空）| postgres（落库持久，重启后 warmup 自动重建 BM25）
   postgres:                       # 仅 type=postgres 时生效；生产用环境变量覆盖，勿写死密码
     url: ${PG_URL:jdbc:postgresql://localhost:5432/ragkb}
-    username: ${PG_USER:rag}
-    password: ${PG_PASSWORD:rag}
+    username: ${PG_USER:postgres}
+    password: ${PG_PASSWORD:postgres}
   chunk:
     strategy: fixed           # fixed | recursive | parent-child（单变量实验开关）
     size: 500

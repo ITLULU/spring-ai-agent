@@ -51,4 +51,19 @@ class ChunkingTest {
         assertFalse(chunks.isEmpty());
         assertTrue(chunks.stream().noneMatch(c -> c.content().isBlank()));
     }
+
+    /** ING-02 根基：同输入必得同 id（UUID.nameUUIDFromBytes），幂等重灌/重启后回删才能对齐向量库 */
+    @Test
+    void chunkIds_areDeterministicAcrossInvocations() {
+        FixedSizeChunker chunker = new FixedSizeChunker();
+        ReflectionUtils.set(chunker, "size", 100);
+        ReflectionUtils.set(chunker, "overlap", 20);
+
+        List<String> first = chunker.split("doc.txt", sample()).stream().map(Chunk::id).toList();
+        List<String> second = chunker.split("doc.txt", sample()).stream().map(Chunk::id).toList();
+        assertEquals(first, second);
+        // 不同文档同内容 → id 必须不同（source 参与散列，避免跨文档串库）
+        List<String> otherSource = chunker.split("other.txt", sample()).stream().map(Chunk::id).toList();
+        assertNotEquals(first, otherSource);
+    }
 }
