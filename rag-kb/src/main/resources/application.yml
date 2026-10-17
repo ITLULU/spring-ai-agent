@@ -3,6 +3,11 @@ spring:
     name: rag-kb
   profiles:
     active: local
+  # spring-boot-starter-jdbc 在 classpath 后，默认会自动装配 DataSource 并在无 url 时启动失败；
+  # 排除掉，改由 ChunkStoreDataSourceConfig 在 rag.chunk-store.type=postgres 时自建——
+  # 保证默认内存模式“零基建 clone 即跑”不被破坏
+  autoconfigure:
+    exclude: org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
   ai:
     openai:
       # OpenAI 兼容接口均可：阿里云 DashScope / DeepSeek / OpenAI / 本地 Ollama(-v1)
@@ -53,6 +58,12 @@ server:
 rag:
   vectorstore:
     simple: true                  # false + -Pmilvus → 切到 MilvusVectorStore
+  chunk-store:
+    type: ${CHUNK_STORE_TYPE:memory}   # memory（默认，重启即空）| postgres（落库持久，重启后 warmup 自动重建 BM25）
+  postgres:                       # 仅 type=postgres 时生效；生产用环境变量覆盖，勿写死密码
+    url: ${PG_URL:jdbc:postgresql://localhost:5432/ragkb}
+    username: ${PG_USER:rag}
+    password: ${PG_PASSWORD:rag}
   chunk:
     strategy: fixed           # fixed | recursive | parent-child（单变量实验开关）
     size: 500

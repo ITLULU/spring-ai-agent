@@ -42,6 +42,19 @@
             <artifactId>pdfbox</artifactId>
             <version>${pdfbox.version}</version>
         </dependency>
+
+        <!-- ChunkStore 落 Postgres（rag.chunk-store.type=postgres）：JdbcTemplate + 驱动。
+             默认内存模式不连库（application.yml 已排除 DataSourceAutoConfiguration），
+             依赖在 classpath 无副作用；向量始终在 Milvus，PG 只存检索单元原文+父子关系。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-jdbc</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
     </dependencies>
 
     <profiles>
