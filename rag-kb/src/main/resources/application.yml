@@ -84,6 +84,6 @@ rag:
     runs-dir: output/eval-runs            # JSONL：每 run 一个文件，逐条 append
     judge-errors-file: data/eval/judge-errors.md   # §4.2 人工复核沉淀的裁判失误清单
     judge:
-      model: ${EVAL_JUDGE_MODEL:}         # 留空→复用 chat 模型（有 self-preference 风险，启动会 WARN）
+      model: ${EVAL_JUDGE_MODEL:qwen-max}         # 留空→复用 chat 模型（有 self-preference 风险，启动会 WARN）
       api-key: ${EVAL_JUDGE_API_KEY:${AI_API_KEY:sk-not-configured}}
       base-url: ${EVAL_JUDGE_BASE_URL:${AI_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}}
