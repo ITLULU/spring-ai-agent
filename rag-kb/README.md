@@ -3,32 +3,133 @@
 > 定位：不是"调个模型查向量库"的 Demo，而是**带评测闭环、可量化迭代**的生产级 RAG 系统。
 > 技术栈：Java 21 / Spring Boot 3.5 / Spring AI 1.1 / Milvus（可切换）/ 手写 BM25 / LLM-as-Judge 评测。
 
+## 运行前提
+
+| 依赖 | 要求 | 自检命令 |
+|---|---|---|
+| JDK | **21**（Temurin/Corretto 均可） | `java -version` 显示 21.x |
+| Maven | 3.9.x | `mvn -v` |
+| LLM API Key | 任一 OpenAI 兼容平台（DashScope / DeepSeek / OpenAI / SiliconFlow） | 见下方环境变量 |
+| Docker | **可选**——默认内存向量库零基建；仅第 3 周切 Milvus 时需要 | — |
+
 ## 快速开始
 
-```bash
+```powershell
 # 1. 配置模型（OpenAI 兼容接口均可：DashScope / DeepSeek / OpenAI / Ollama）
 #    永久写入（推荐，一次设置全局生效）：setx 后需重启 IDEA/终端才对新进程生效
 setx AI_API_KEY "sk-xxx"
 #    或仅当前会话临时生效：
+
 $env:AI_API_KEY="sk-xxx"; $env:AI_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode"
 $env:AI_CHAT_MODEL="qwen-plus"; $env:AI_EMBED_MODEL="text-embedding-v3"
+$env:EVAL_JUDGE_MODEL="qwen-turbo"   # 强烈建议：独立裁判模型，否则 Judge 复用 chat 模型
+                                     # （self-preference 风险 + 继承 temperature=0.1，判定漂移）
 
-# 2. 启动（默认内存向量库，零基建）
-mvn spring-boot:run
+# 2. 启动——⚠️ 必须在 rag-kb/ 目录下运行（数据路径都是相对工作目录的）
+cd rag-kb; mvn spring-boot:run
+```
 
+**启动成功判定**：日志出现 `Tomcat started on port 8000`；`GET http://localhost:8000/api/eval/runs` 返回 `[]`；
+MCP 端点 `http://localhost:8000/sse` 可建立 SSE 连接。
+
+> ⚠️ **Windows 用户注意**：PowerShell 里 `curl` 是 `Invoke-WebRequest` 别名，本 README 所有示例请写全
+> `curl.exe`；且 PowerShell 5.1 默认 GBK 编码会把请求体里的中文变成乱码字节（表现为"检索全不命中"的
+> 假象）——先执行 `chcp 65001`，或把 JSON 存成 UTF-8 文件后用 `--data-binary "@req.json"` 发送。
+
+> ⚠️ **重启即清空（当前架构的硬纪律）**：向量库/BM25/ChunkStore 均为内存实现，**每次重启服务后必须
+> 重新 ingest 再查询/评测**，否则全量表现为拒答或 RETRIEVAL_MISS 假象。另：修复 ING-02（幂等入库）前，
+> 重复 ingest 同一文档会翻倍语料，重灌前先 `POST /api/ingest/reset`。
+
+```powershell
 # 3. 入库 → 问答 → 评测（评测机：异步 run + 错题重跑 + diff，详见 docs/评测机增强实施方案.md）
-curl -X POST localhost:8000/api/ingest   -H "Content-Type: application/json" -d '{"path":"data/docs/attendance_policy.md"}'
-curl -X POST localhost:8000/api/query    -H "Content-Type: application/json" -d '{"question":"入职满3年的员工有几天年假？"}'
-curl -X POST localhost:8000/api/eval/dataset/validate                          # SOP① 锚点校验
-curl -X POST localhost:8000/api/eval/runs -H "Content-Type: application/json" -d '{"tag":"baseline"}'  # 返回 runId，后台跑
-curl localhost:8000/api/eval/runs/{runId}                                       # 进度/汇总
-curl "localhost:8000/api/eval/runs/{runId}/results?verdict=FAIL"                # 错题清单含归因标签与现场快照
-curl -X POST localhost:8000/api/eval/runs -H "Content-Type: application/json" -d '{"onlyFailedFrom":"{runId}"}'  # 错题本重跑
-curl "localhost:8000/api/eval/diff?base={runId}&head={runId2}"                  # 已修复/新增失败（跨 datasetVersion 拒绝）
+curl.exe -X POST localhost:8000/api/ingest   -H "Content-Type: application/json" -d '{\"path\":\"data/docs/attendance_policy.md\"}'
+curl.exe -X POST localhost:8000/api/query    -H "Content-Type: application/json" -d '{\"question\":\"入职满3年的员工有几天年假？\"}'
+curl.exe -X POST localhost:8000/api/eval/dataset/validate                          # SOP① 锚点校验
+curl.exe -X POST localhost:8000/api/eval/runs -H "Content-Type: application/json" -d '{\"tag\":\"baseline\"}'  # 返回 runId，后台跑
+curl.exe localhost:8000/api/eval/runs/{runId}                                       # 进度/汇总
+curl.exe "localhost:8000/api/eval/runs/{runId}/results?verdict=FAIL"                # 错题清单含归因标签与现场快照
+curl.exe -X POST localhost:8000/api/eval/runs -H "Content-Type: application/json" -d '{\"onlyFailedFrom\":\"{runId}\"}'  # 错题本重跑
+curl.exe "localhost:8000/api/eval/diff?base={runId}&head={runId2}"                  # 已修复/新增失败（跨 datasetVersion 拒绝）
 ```
 
 评测结果落 `output/eval-runs/{runId}.jsonl`（逐题存档：三路分数/错因标签/token 记账），
 Markdown 报告由 `GET /api/eval/runs/{runId}/report` 从 JSONL 渲染——这就是"优化前 X% → 优化后 Y%"数字的出处。
+
+## 配置参考（环境变量与 rag.* 键）
+
+| 环境变量 | 对应配置键 | 默认值 | 何时改 |
+|---|---|---|---|
+| `AI_API_KEY` | spring.ai.openai.api-key | `sk-not-configured`（**首次调用才报错，不阻启动**） | 必设 |
+| `AI_BASE_URL` | spring.ai.openai.base-url | DashScope 兼容端点 | 换平台 |
+| `AI_CHAT_MODEL` / `AI_EMBED_MODEL` | chat/embedding options.model | `qwen-plus` / `text-embedding-v3` | 换模型 |
+| `EVAL_JUDGE_MODEL` | rag.eval.judge.model | 空=复用 chat（启动 WARN） | 消除 self-preference |
+| `EVAL_JUDGE_API_KEY` / `EVAL_JUDGE_BASE_URL` | rag.eval.judge.* | 回落主配置 | 裁判用另一家平台时 |
+| `RERANK_URL` | rag.rerank.base-url | `http://localhost:8080/rerank` | 配合 `rag.rerank.enabled=true` 接托管 rerank API |
+| `MILVUS_HOST` / `MILVUS_PORT` | vectorstore.milvus.client.* | `localhost` / `19530` | 切 Milvus |
+
+| 配置键（application.yml） | 默认 | 说明 |
+|---|---|---|
+| `rag.vectorstore.simple` | `true` | `false` + `-Pmilvus` → Milvus |
+| `rag.chunk.strategy` | `recursive` | `fixed` / `recursive` / `parent-child`，单变量实验开关 |
+| `rag.retrieval.top-n` / `final-k` | 20 / 5 | 每路召回数 / 喂 LLM 的上下文块数 |
+| `rag.retrieval.hybrid` | `true` | `false` → 纯向量对照组 |
+| `rag.retrieval.min-vector-similarity` | 0.30 | 拒答阈值：漏答 vs 幻觉的权衡点，用评测集调 |
+
+## 输出示例（真实字段结构，非虚构格式）
+
+`POST /api/query` 正常回答——每个结论句带 `[n]` 编号引用，citations 可回查：
+
+```json
+{
+  "answer": "入职满 3 年享有 10 天带薪年假 [1]。年假需在当年 12 月 31 日前使用完毕，未用完不折算工资 [1]。",
+  "refused": false,
+  "citations": [
+    { "no": 1, "chunkId": "3f2a…", "source": "attendance_policy.md",
+      "snippet": "员工入职满 1 年享有 5 天带薪年假，满 3 年享有 10 天，满 5 年享有 15 天。年假需在当年…" }
+  ],
+  "elapsedMs": 2841, "promptTokens": 512, "completionTokens": 63
+}
+```
+
+超出文档范围的问题触发检索层拒答（不调 LLM，`citations` 为空、token 为 0）：
+
+```json
+{ "answer": "无法回答", "refused": true, "citations": [], "elapsedMs": 312, "promptTokens": 0, "completionTokens": 0 }
+```
+
+`output/eval-runs/{runId}.jsonl` 单行 case 存档（第一行是 run 头：config+models 快照）：
+
+```json
+{"type":"case","caseId":"att-003","category":"fact","heldOut":false,"verdict":"PASS",
+ "failureLayer":"NONE","question":"入职满3年的员工有几天年假？","answer":"10 天 [1]","refused":false,
+ "citationValid":true,
+ "retrieval":[{"chunkId":"3f2a…","source":"attendance_policy.md","vectorScore":0.81,"bm25Score":7.4,"fusedScore":0.032,"evidenceHit":true}],
+ "judgeVerdict":"CORRECT","latencyMs":2980,"tokens":{"prompt":512,"completion":63,"judgePrompt":180,"judgeCompletion":4}}
+```
+
+## 评测结果（优化前 → 优化后）
+
+> 规则：每个数字必须能追溯到具体 runId；跨 datasetVersion 禁止对比（diff 接口会拒绝）。
+> ⬜ **待 baseline 跑完后回填本表**（README 的承诺在这一节兑现）。
+
+| 实验（单变量） | 主集准确率 | held-out 准确率 | 拒答准确率 | 错因 Top1 | datasetVersion | runId |
+|---|---|---|---|---|---|---|
+| baseline：recursive + hybrid | – | – | – | – | – | *待填* |
+| fixed 切块对照 | – | – | – | – | – | *待填* |
+| parent-child 切块 | – | – | – | – | – | *待填* |
+| 纯向量（hybrid=false） | – | – | – | – | – | *待填* |
+| + rerank | – | – | – | – | – | *待填* |
+| 拒答阈值 0.30 → 0.45 | – | – | – | – | – | *待填* |
+
+## 验证与测试
+
+```powershell
+mvn -pl rag-kb test          # 29 个单元/契约测试（切块/BM25+RRF/评测存档/失败归因/MCP 工具契约）
+pwsh scripts/mcp-probe.ps1   # MCP 最小客户端演练：SSE 握手→initialize→tools/list→tools/call
+```
+
+`RagKbToolsTest.toolCallbacksExposeExactContract` 守护对外 10 个工具的 name/description/参数 schema——
+改工具契约必先过这条测试（REST 与 MCP 双传输共享同一 Service 层的"契约锚"）。
 
 ## MCP Server：把 RAG + 评测机封装成标准工具（Agent 生态接入点）
 
@@ -254,19 +355,63 @@ docker compose up -d               # 需要 Docker
 mvn -Pmilvus spring-boot:run -Dspring-boot.run.arguments=--rag.vectorstore.simple=false
 ```
 
+切换前逐条核对（都是会静默改变评测结论的坑）：
+
+1. ⚠️ **维度对齐**：`text-embedding-v3` 默认输出 **1024 维**，Spring AI Milvus starter 建 collection 默认
+   **1536 维**——须设 `spring.ai.vectorstore.milvus.embeddingDimensions: 1024`，否则首次入库 dimension mismatch
+2. **profile 是编译期行为**：命令行 `-Pmilvus` 自带重编译；IDEA 需勾选 milvus profile 并 Reload，
+   否则 `simple=false` 时找不到 VectorStore Bean 启动失败
+3. **重启纪律不 relaxation**：切 Milvus 后仅向量持久化，`ChunkStore`/BM25 仍为内存——重启后融合候选
+   静默为空、系统假"低分拒答"（详见 `docs/rag-kb企业级问题排查清单.md` DAT-01），warmup 实现前照旧全量重灌
+4. 换 embedding 模型 = 换向量空间，必须换 `collectionName` 或清库重灌
+
+## 项目结构
+
+```
+rag-kb/
+├── data/
+│   ├── docs/            # 知识库源文档（md/txt/pdf），ingest 与锚点校验的基准目录
+│   └── eval/            # 评测集：qa_v2/qa_v2.json（36 题，含 held-out 与对抗题）+ judge-errors.md
+├── output/eval-runs/    # 每次评测 run 的 JSONL 存档（自动生成，报告由此渲染）
+├── docs/                # 12周执行计划 / 评测机实施方案 / MCP 面试考点 / 环境清单 / 企业级排查清单
+├── scripts/mcp-probe.ps1# MCP 端到端探针
+└── docker-compose.yml   # Milvus standalone（可选，rerank 服务已注释备用）
+```
+
 ## 实验记录规范
 
 每次实验只改一个变量（策略/阈值/topN/rerank），`POST /api/eval/runs {"tag":"变量=值"}`，
-用 `GET /api/eval/diff` 对比基线后把 runId 记入 `docs/experiments/`。
+用 `GET /api/eval/diff` 对比基线后把 runId 记入 `docs/experiments/`（首次跑评测时创建）。
 跨 datasetVersion 的 run 禁止对比（diff 接口会直接拒绝）。README 的"优化前后数字"必须能追溯到具体 runId。
 
-## TODO（学习路线附带任务）
+## 已知局限（Local-first 学习系统的诚实边界）
 
+- **无鉴权**：REST 与 MCP 端点均匿名可调，ingest 接受任意本机路径——定位为本地学习环境；
+  生产化路径见排查清单 SEC-01/02（base-dir 白名单 + API-key filter）
+- **全内存存储**：向量/BM25/ChunkStore 重启即失，生产应落 Milvus + Postgres（清单 DAT-01）
+- **ingest 非幂等**（清单 ING-02）、**kb_ingest 目录支持未实现**（清单 ING-01，当前只接受单文件路径）
+- **评测单 run 串行**：单线程 executor，千级 case 内是正确成本（方案 §0"不做清单"），万级需并发+限流
+- **解析天花板**：txt/md/pdf 文本层；表格 PDF/扫描件（tabula/OCR）在未做清单内（下方 TODO）
+- **在线延迟口径**：`/api/query` 的 elapsedMs 暂不含检索段（清单 QA-01，修复前两套数字不要混用）
+
+## FAQ
+
+| 现象 | 原因与解法 |
+|---|---|
+| 启动正常，一查询就报 401/invalid api key | `sk-not-configured` 占位值不阻启动、**首次调用才炸**——检查 `AI_API_KEY` 是否在当前会话设置 |
+| 所有问题都返回"无法回答" | ① 服务重启后没重新 ingest（内存库已清空）；② `min-vector-similarity` 阈值过高；先用 `/api/retrieve` 看三路分数 |
+| 中文查询莫名不命中、分数极低 | PowerShell GBK 编码把请求体打成了乱码字节——`chcp 65001` 或 `--data-binary "@req.json"` |
+| 评测分数比上一轮莫名下降 | 检查是否重复 ingest 导致语料翻倍（ING-02），先 `/api/ingest/reset` 再单文件重灌 |
+| 切 Milvus 后启动失败 | Maven profile 没生效（IDEA 未勾选/未 Reload）或维度未对齐（见"切到 Milvus"第 1 条） |
+| 评测中途要改配置重跑 | run 由守护线程执行、无优雅停机——kill 后用 `{"resumeRunId":"…"}` 断点续跑 |
+
+## TODO（学习路线附带任务，编号关联 docs/rag-kb企业级问题排查清单.md）
+
+- [ ] 🔴 修 ING-01/ING-02/QA-01 三个 P0（入库目录支持 / 幂等 ingest / 延迟口径统一）
 - [ ] 表格 PDF / 扫描件解析（tabula / OCR，见 `DocumentParserService` 注释）
-- [ ] 标题层级切块 HeadingChunker（面包屑前缀，见上文「切块专题」§2A）
-- [ ] Contextual Retrieval：入库时 LLM 生成块背景前缀（见上文「切块专题」§2B）
 - [ ] 语义切块（embedding 相似度断句）对比实验
-- [ ] ChunkStore 落库（Postgres），当前为内存实现；十万级演进路线见 `docs/评测机增强实施方案.md` §8
+- [ ] ChunkStore 落库（Postgres）+ 启动 warmup（DAT-01）；十万级演进路线见 `docs/评测机增强实施方案.md` §8
 - [ ] 评测集扩到 100 条（反向出题法，见 `QaCase` 注释；现 36 题：主集 26 + held-out 10，含 10 道对抗题）
 - [ ] RAGAS 指标对照：用 Python RAGAS 跑同一测试集，校准自建 Judge
+- [ ] MCP 传输切 Streamable HTTP（SSE 已被规范废弃，PRO-01）；ChatClient/ChatMemory 化（AGT-01/02）
 - [x] 把本系统封装成工具接入 Agent 生态（MCP Server 已完成，见上节；接阶段2工单处理 Agent 待做）

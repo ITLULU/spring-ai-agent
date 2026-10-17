@@ -18,7 +18,7 @@ POST {{host}}/api/ingest
 Content-Type: application/json
 
 {
-  "path": "data/docs/attendance_policy.md"
+  "path": "data/docs/attendance_policy.pdf"
 }
 
 ### 入库：报销与费用政策

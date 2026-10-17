@@ -238,7 +238,7 @@
 | D4 | 拒答识别 `startsWith("无法回答")`：模型输出"无法回答。经核查…"或前后缀变体时误判；Judge 的 `contains("CORRECT")` 解析同样脆 | `QaService:90`、`EvalJudge:88` |
 | D5 | token 缺语义哨兵值 `-1` 与 `0` 混用（usage 缺失记 -1，NONE 记 0，`Math.max(0,·)` 吞掉差异） | `QaService:87-88`、`CaseResult:68` |
 | D6 | `FixedSizeChunker` 的 `replaceAll("\\s{2,}"," ")` 抹掉段落边界，fixed 策略对结构损伤比看起来大——对比实验时要意识到这个混杂变量 | `FixedSizeChunker:33` |
-| D7 | README:101 引用实验记录目录 `docs/experiments/` 尚不存在（`rag-kb/docs/` 本体已有 5 份文档，仅缺 experiments 子目录），第一次跑评测时建上 | README:101 |
+| D7 | README"实验记录规范"节引用 `docs/experiments/` 尚不存在（文档已统一在 `rag-kb/docs/`，仅缺 experiments 子目录），第一次跑评测时建上 | README 实验记录规范节 |
 | D8 | `kb_ingest` 与 `/api/ingest` 对 IO 错误的响应形态不同（一个 throws 一个 500 白页），统一归入 API-01/RES-02 | — |
 
 ---

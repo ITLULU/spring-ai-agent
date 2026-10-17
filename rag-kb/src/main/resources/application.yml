@@ -48,7 +48,7 @@ rag:
   vectorstore:
     simple: true                  # false + -Pmilvus → 切到 MilvusVectorStore
   chunk:
-    strategy: recursive           # fixed | recursive | parent-child（单变量实验开关）
+    strategy: fixed           # fixed | recursive | parent-child（单变量实验开关）
     size: 500
     overlap: 80
     parent-size: 1200
