@@ -1,0 +1,17 @@
+# data/ 下生成的产物不入库
+data/output/
+
+# Maven
+target/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# 环境变量文件（含 API Key，绝不提交）
+.env

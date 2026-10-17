@@ -1,0 +1,44 @@
+[
+  {
+    "question": "入职满 3 年的员工有几天带薪年假？",
+    "expectedAnswer": "10 天。",
+    "source": "attendance_policy.md",
+    "unanswerable": false
+  },
+  {
+    "question": "一线城市出差住宿费每晚上限是多少？",
+    "expectedAnswer": "600 元。",
+    "source": "expense_policy.md",
+    "unanswerable": false
+  },
+  {
+    "question": "年假可以累积到次年吗？",
+    "expectedAnswer": "不可以，需在当年 12 月 31 日前使用完毕，未使用不折算工资。",
+    "source": "attendance_policy.md",
+    "unanswerable": false
+  },
+  {
+    "question": "单笔 3000 元的报销需要谁审批？",
+    "expectedAnswer": "部门总监。",
+    "source": "expense_policy.md",
+    "unanswerable": false
+  },
+  {
+    "question": "累计加班多少小时可以调休 1 天？",
+    "expectedAnswer": "8 小时。",
+    "source": "attendance_policy.md",
+    "unanswerable": false
+  },
+  {
+    "question": "公司的年度利润是多少？",
+    "expectedAnswer": "",
+    "source": "",
+    "unanswerable": true
+  },
+  {
+    "question": "员工的股票代码是什么？",
+    "expectedAnswer": "",
+    "source": "",
+    "unanswerable": true
+  }
+]

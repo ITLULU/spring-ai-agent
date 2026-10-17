@@ -1,0 +1,38 @@
+# Milvus standalone（阶段1第3周切换向量库时使用；需要 Docker）
+# 启动：docker compose up -d    停止：docker compose down
+# 说明：默认运行不依赖本文件——脚手架用内存向量库即可跑通全链路与评测。
+version: "3.8"
+
+services:
+  milvus:
+    image: milvusdb/milvus:v2.4-latest
+    command: ["milvus", "run", "standalone"]
+    environment:
+      COMMON_STORAGETYPE: local
+    ports:
+      - "19530:19530"   # gRPC
+      - "9091:9091"     # metrics
+    volumes:
+      - milvus-data:/var/lib/milvus
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  # 可选：本地 bge-reranker 精排服务（需 GPU）。启用后设 rag.rerank.enabled=true
+  # rerank:
+  #   image: ghcr.io/huggingface/text-embeddings-inference:1.5
+  #   command: ["--model-id", "BAAI/bge-reranker-v2-m3"]
+  #   ports:
+  #     - "8080:80"
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: 1
+  #             capabilities: [gpu]
+
+volumes:
+  milvus-data:

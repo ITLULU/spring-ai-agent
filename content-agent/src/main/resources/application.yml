@@ -1,0 +1,22 @@
+spring:
+  application:
+    name: content-agent
+  ai:
+    openai:
+      # OpenAI 兼容接口均可：阿里云 DashScope / DeepSeek / OpenAI / 本地 Ollama(-v1)
+      # 通过环境变量注入，切勿把 key 写进代码提交到 GitHub
+      api-key: ${AI_API_KEY:sk-not-configured}
+      base-url: ${AI_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
+      chat:
+        options:
+          model: ${AI_CHAT_MODEL:qwen-plus}
+          temperature: 0.75      # 内容创作需要创造性，比 RAG 高；分析类任务可单独调低
+
+server:
+  port: 8001
+
+content-agent:
+  # 输入：你的想法 / 项目实战 markdown 所在目录
+  input-dir: data/ideas
+  # 输出：生成的变现方案 + 知乎稿 + 公众号稿落盘目录
+  output-dir: data/output
