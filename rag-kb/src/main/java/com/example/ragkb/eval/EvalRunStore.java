@@ -1,6 +1,5 @@
 package com.example.ragkb.eval;
 
-import java.io.File;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
@@ -15,6 +14,7 @@ import java.util.stream.Collectors;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import com.example.ragkb.config.DataPath;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -36,7 +36,7 @@ public class EvalRunStore {
         if (runId == null || runId.contains("..") || runId.contains("/") || runId.contains("\\")) {
             throw new IllegalArgumentException("非法 runId: " + runId);
         }
-        return Path.of(runsDir, runId + ".jsonl");
+        return DataPath.resolve(runsDir).resolve(runId + ".jsonl");
     }
 
     public boolean exists(String runId) {
@@ -75,11 +75,11 @@ public class EvalRunStore {
     }
 
     public List<String> listRunIds() throws IOException {
-        File dir = new File(runsDir);
-        if (!dir.isDirectory()) {
+        Path dir = DataPath.resolve(runsDir);
+        if (!Files.isDirectory(dir)) {
             return List.of();
         }
-        try (var paths = Files.list(dir.toPath())) {
+        try (var paths = Files.list(dir)) {
             return paths.map(p -> p.getFileName().toString())
                     .filter(n -> n.endsWith(".jsonl"))
                     .map(n -> n.substring(0, n.length() - 6))

@@ -1,11 +1,9 @@
 package com.example.ragkb.eval;
 
-import java.io.File;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
@@ -18,6 +16,7 @@ import java.util.regex.Pattern;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import com.example.ragkb.config.DataPath;
 import com.example.ragkb.retrieval.RetrievedChunk;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -45,14 +44,14 @@ public class DatasetService {
     private String docsDir;
 
     public List<QaCase> loadCases() throws IOException {
-        return mapper.readValue(new File(datasetPath),
+        return mapper.readValue(DataPath.resolve(datasetPath).toFile(),
                 mapper.getTypeFactory().constructCollectionType(List.class, QaCase.class));
     }
 
     /** datasetVersion = 测试集文件内容 hash 前 8 位：跨版本指标禁止对比（§5.2） */
     public String datasetVersion() {
         try {
-            byte[] bytes = Files.readAllBytes(Path.of(datasetPath));
+            byte[] bytes = Files.readAllBytes(DataPath.resolve(datasetPath));
             MessageDigest md = MessageDigest.getInstance("SHA-256");
             byte[] hash = md.digest(bytes);
             StringBuilder sb = new StringBuilder();
@@ -156,7 +155,7 @@ public class DatasetService {
     private String documentNormalized(String source) throws IOException {
         return docCache.computeIfAbsent(source, k -> {
             try {
-                return normalize(Files.readString(Path.of(docsDir, k), StandardCharsets.UTF_8));
+                return normalize(Files.readString(DataPath.resolve(docsDir).resolve(k), StandardCharsets.UTF_8));
             } catch (IOException ex) {
                 throw new UncheckedIOException(ex);
             }

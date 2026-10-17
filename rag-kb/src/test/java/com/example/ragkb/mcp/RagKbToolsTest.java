@@ -104,7 +104,7 @@ class RagKbToolsTest {
     void kbRetrieveAddsEvidenceHitWithSharedProbe() {
         String content = "## 年假\n员工入职满 1 年享有 5 天带薪年假，满 3 年享有 10 天。";
         when(retrievalService.retrieve(any())).thenReturn(List.of(
-                new RetrievedChunk("c-1", content, content, "attendance_policy.md",
+                new RetrievedChunk("c-1", content, content, "attendan ce_policy.md",
                         0.5, 3.0, 0.03, null)));
 
         var rows = tools().kbRetrieve("年假几天", "员工入职满 1 年享有 5 天带薪年假");

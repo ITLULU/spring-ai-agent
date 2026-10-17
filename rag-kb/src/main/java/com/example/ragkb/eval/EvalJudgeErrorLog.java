@@ -11,6 +11,8 @@ import java.time.LocalDate;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import com.example.ragkb.config.DataPath;
+
 /**
  * Judge 失误清单（《方案》§4.2）——替代正式 kappa 校准的轻量做法：
  * 人工复核失败 case 时发现"Judge 误判"就 POST 记录一条，沉淀到 judge-errors.md。
@@ -29,7 +31,7 @@ public class EvalJudgeErrorLog {
     }
 
     public synchronized String append(JudgeErrorEntry e) throws IOException {
-        Path p = Path.of(filePath);
+        Path p = DataPath.resolve(filePath);
         if (p.getParent() != null) {
             Files.createDirectories(p.getParent());
         }
@@ -52,7 +54,7 @@ public class EvalJudgeErrorLog {
 
     public String read() {
         try {
-            Path p = Path.of(filePath);
+            Path p = DataPath.resolve(filePath);
             return Files.isRegularFile(p) ? Files.readString(p, StandardCharsets.UTF_8)
                     : "# Judge 失误清单\n\n（暂无记录）\n";
         } catch (IOException ex) {

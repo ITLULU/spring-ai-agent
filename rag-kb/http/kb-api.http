@@ -1,0 +1,95 @@
+### KbController 接口测试（rag-kb · 端口 8000）
+### 用法：IDEA 直接点击请求左侧的绿色箭头运行；改 host 变量即可切环境。
+### 注意 .http 文件本身是 UTF-8，中文请求体不会出现 PowerShell curl 的乱码问题。
+
+@host = http://localhost:8000
+
+### ------------------------------------------------------------
+### 0. 一键准备环境：先清空 → 再入库两篇政策文档
+###    （按顺序执行：reset → ingest ×2，之后才能检索/问答）
+### ------------------------------------------------------------
+
+### 清空向量库与 BM25 索引
+POST {{host}}/api/ingest/reset
+Content-Type: application/json
+
+### 入库：考勤与休假管理制度
+POST {{host}}/api/ingest
+Content-Type: application/json
+
+{
+  "path": "data/docs/attendance_policy.md"
+}
+
+### 入库：报销与费用政策
+POST {{host}}/api/ingest
+Content-Type: application/json
+
+{
+  "path": "data/docs/expense_policy.md"
+}
+
+### ------------------------------------------------------------
+### 1. /api/retrieve — 纯检索归因（不调 LLM，不耗 token）
+### ------------------------------------------------------------
+
+### 1.1 基础检索：看各路召回分数（vectorScore / bm25Score / fusedScore / rerankScore）
+POST {{host}}/api/retrieve
+Content-Type: application/json
+
+{
+  "question": "出差期间的餐饮补贴是多少？需要发票吗？"
+}
+
+### 1.2 带 evidence 锚文本：排查 RETRIEVAL_MISS 时用
+###     逐块返回 evidenceHit，一眼看出正确证据块有没有被召回
+POST {{host}}/api/retrieve?evidence=每天120元包干使用
+Content-Type: application/json
+
+{
+  "question": "出差期间的餐饮补贴是多少？需要发票吗？"
+}
+
+### 1.3 对照组：考勤类问题（验证跨文档检索不串味）
+POST {{host}}/api/retrieve
+Content-Type: application/json
+
+{
+  "question": "年假怎么计算？病假需要提交什么材料？"
+}
+
+### ------------------------------------------------------------
+### 2. /api/query — 全链路问答（检索 + LLM 生成，带引用溯源）
+### ------------------------------------------------------------
+
+### 2.1 报销政策：审批分档（期望答案引用 expense_policy.md）
+POST {{host}}/api/query
+Content-Type: application/json
+
+{
+  "question": "单笔 3000 元的报销需要谁审批？报销时限是多久？"
+}
+
+### 2.2 发票要求：抬头与税号细节
+POST {{host}}/api/query
+Content-Type: application/json
+
+{
+  "question": "报销对发票有什么要求？餐饮发票缺明细会怎样？"
+}
+
+### 2.3 考勤制度：年假/病假
+POST {{host}}/api/query
+Content-Type: application/json
+
+{
+  "question": "员工年假有多少天？请病假需要什么流程？"
+}
+
+### 2.4 拒答测试：答案不在库中（期望触发低置信度拒答，而不是幻觉）
+POST {{host}}/api/query
+Content-Type: application/json
+
+{
+  "question": "公司的股票期权归属计划（Vesting）是怎么安排的？"
+}
