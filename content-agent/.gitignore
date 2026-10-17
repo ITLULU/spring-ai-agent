@@ -1,17 +1,15 @@
-# data/ 下生成的产物不入库
+# content-agent 模块专属忽略规则
+# 通用规则（Maven / IDE / OS / .env 等）见根目录 .gitignore
+
+# ===== 运行产物 =====
+# data/ 下由流水线生成的分析结果、平台文章等
 data/output/
+data/cache/
 
-# Maven
-target/
+# ===== 日志 =====
+logs/
+*.log
 
-# IDE
-.idea/
-*.iml
-.vscode/
-
-# OS
-Thumbs.db
-.DS_Store
-
-# 环境变量文件（含 API Key，绝不提交）
-.env
+# ===== 本地覆盖配置（可能含密钥） =====
+application-local.yml
+application-local.yaml

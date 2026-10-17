@@ -1,7 +1,24 @@
-target/
+# rag-kb 模块专属忽略规则
+# 通用规则（Maven / IDE / OS / .env 等）见根目录 .gitignore
+
+# ===== 运行产物 =====
+# 评测运行结果（JSONL）、临时导出等
 output/
-*.class
-.idea/
-*.iml
-.vscode/
-.env
+!output/.gitkeep
+
+# 本地向量索引 / BM25 持久化缓存（若启用）
+data/index/
+data/tmp/
+
+# ===== 日志 =====
+logs/
+*.log
+
+# ===== Docker 本地数据卷（如挂载 ./pgdata 等） =====
+pgdata/
+volume-data/
+
+# 注意：以下目录属于版本化资产，必须提交，切勿忽略
+# - data/docs/            种子语料
+# - data/eval/qa_v2/      测试集
+# - data/eval/judge-errors.md  人工复核沉淀

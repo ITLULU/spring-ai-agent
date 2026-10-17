@@ -1,0 +1,64 @@
+# ===== Maven =====
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.jar
+
+# ===== Java 编译产物 =====
+*.class
+*.jar
+*.war
+*.ear
+*.log
+
+# ===== IDE - IntelliJ IDEA =====
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# ===== IDE - Eclipse / STS =====
+.settings/
+.project
+.classpath
+.factorypath
+
+# ===== IDE - VS Code =====
+.vscode/
+
+# ===== IDE - NetBeans =====
+nbproject/
+nb-configuration.xml
+nbactions.xml
+
+# ===== OS =====
+Thumbs.db
+ehthumbs.db
+desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+
+# ===== 环境变量 / 密钥 =====
+.env
+.env.*
+*.pem
+
+# ===== Spring Boot =====
+application-local.yml
+application-local.yaml
+application-local.properties
+
+# ===== 其他 =====
+*.swp
+*.tmp
+*.bak
+hs_err_pid*
+replay_pid*
+.coversure/
