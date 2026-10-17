@@ -31,6 +31,11 @@ public class IngestService {
     @Value("${rag.chunk.strategy:recursive}")
     private String strategyName;
 
+    @Value("${spring.ai.openai.api-key}")
+    private String openAiApiKey;
+    @Value("${spring.ai.openai.base-url}")
+    private String openAiBaseUrl;
+
     public IngestService(DocumentParserService parser, VectorStore vectorStore,
                          ChunkStore chunkStore, Bm25Index bm25Index,
                          List<ChunkingStrategy> chunkingStrategies) {

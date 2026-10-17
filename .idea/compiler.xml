@@ -13,8 +13,8 @@
   </component>
   <component name="JavacSettings">
     <option name="ADDITIONAL_OPTIONS_OVERRIDE">
-      <module name="content-agent" options="" />
-      <module name="rag-kb" options="" />
+      <module name="content-agent" options="-parameters" />
+      <module name="rag-kb" options="-parameters" />
     </option>
   </component>
 </project>

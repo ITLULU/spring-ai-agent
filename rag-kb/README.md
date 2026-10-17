@@ -7,6 +7,9 @@
 
 ```bash
 # 1. 配置模型（OpenAI 兼容接口均可：DashScope / DeepSeek / OpenAI / Ollama）
+#    永久写入（推荐，一次设置全局生效）：setx 后需重启 IDEA/终端才对新进程生效
+setx AI_API_KEY "sk-xxx"
+#    或仅当前会话临时生效：
 $env:AI_API_KEY="sk-xxx"; $env:AI_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode"
 $env:AI_CHAT_MODEL="qwen-plus"; $env:AI_EMBED_MODEL="text-embedding-v3"
 

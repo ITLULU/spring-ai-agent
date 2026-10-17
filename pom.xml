@@ -77,9 +77,28 @@
         <pluginManagement>
             <plugins>
                 <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-compiler-plugin</artifactId>
+                    <configuration>
+                        <!-- starter-parent 隐式提供的另一项配置：编译时保留方法参数名，
+                             否则 @RequestParam 未显式命名时运行时反射解析不到，报
+                             "Name for argument of type [java.lang.String] not specified" -->
+                        <parameters>true</parameters>
+                    </configuration>
+                </plugin>
+                <plugin>
                     <groupId>org.springframework.boot</groupId>
                     <artifactId>spring-boot-maven-plugin</artifactId>
                     <version>${spring-boot.version}</version>
+                    <!-- starter-parent 换成 BOM import 后，repackage 执行需在此显式声明，
+                         否则 package 只出普通 jar，java -jar 报"没有主清单属性" -->
+                    <executions>
+                        <execution>
+                            <goals>
+                                <goal>repackage</goal>
+                            </goals>
+                        </execution>
+                    </executions>
                 </plugin>
             </plugins>
         </pluginManagement>
