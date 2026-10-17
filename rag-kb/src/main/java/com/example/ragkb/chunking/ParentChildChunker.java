@@ -21,9 +21,11 @@ import org.springframework.stereotype.Component;
 @Component
 public class ParentChildChunker implements ChunkingStrategy {
 
+    /** 父块上限字符数：段落贪心聚合到此长度封块（rag.chunk.parent-size） */
     @Value("${rag.chunk.parent-size:1200}")
     private int maxParentChars;
 
+    /** 子块固定长度：父块内硬切（不再递归），子块是检索单元，短=聚焦 */
     @Value("${rag.chunk.child-size:300}")
     private int childChars;
 
@@ -32,6 +34,20 @@ public class ParentChildChunker implements ChunkingStrategy {
         return "parent-child";
     }
 
+    /**
+     * 两阶段切块，返回的只是子块列表——父块不入库、以副本形式挂在每个子块的
+     * metadata.parentContent 上（用存储换简单：无需检索时二次回表查父块）。
+     * <p>阶段 1·段落聚合出 parent：按空行切段后贪心拼接至 maxParentChars，
+     * 边界尽量落在自然段之间（文档结构感）；拼接用 \n\n 回填保持原文段落分隔。
+     * <p>阶段 2·父块内硬切 child：固定 childChars 步进、无重叠——故意不如
+     * FixedSizeChunker 那样加 overlap：一个事实被拦腰切到两个子块时，
+     * 两个子块都指向同一父块，生成时父块全文完整，信息并不丢——
+     * 父块机制本身就是 overlap 的替代品（面试对比点）。
+     * <p>字段语义提示：Chunk.index 记的是父块序号（非全局块号），同父兄弟子块
+     * index 相同；引用展示时靠它判断"两条命中来自同一父块"（重复信息信号）。
+     * 代价（已知短处）：parentContent 随每个子块存一份副本，父块多子块时内存
+     * 约放大 parentSize/childSize 倍，落库演进（Postgres）时应改成 parent 表 + 外键。
+     */
     @Override
     public List<Chunk> split(String source, String text) {
         List<Chunk> children = new ArrayList<>();

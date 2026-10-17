@@ -32,6 +32,19 @@ public class EvalJudge {
     private final String modelName;
     private final boolean sameAsGenerator;
 
+    /**
+     * 双模式构造：
+     * <ul>
+     *   <li>未配置 rag.eval.judge.model → 复用生成的 ChatModel（sameAsGenerator=true）。
+     *       省钱省事，但这是 self-preference 偏差：被告的律师当法官，模型偏爱自己
+     *       风格的输出，PASS 率会虚高，所以启动时强制打 WARN 留痕；</li>
+     *   <li>配置了 → 手工构建独立 OpenAiChatModel（可指向不同厂商/端点），并锁
+     *       temperature=0.0：裁判要的是可复现裁决，不是创造性——采样温度会让同一
+     *       答案在不同 run 里得到不同判决，diff 结果就不可信了。</li>
+     * </ul>
+     * 注意 @Lazy 注入 ChatModel：裁判模型的构建推迟到首次评测，避免应用启动
+     * 因评测专用配置缺失而失败（评测是可选能力，不该绑架主链路）。
+     */
     public EvalJudge(@Lazy ChatModel chatModel,
                      @Value("${spring.ai.openai.chat.options.model:chat}") String chatModelName,
                      @Value("${rag.eval.judge.model:}") String judgeModel,
@@ -66,7 +79,25 @@ public class EvalJudge {
         }
     }
 
-    /** 对照参考答案判正确性；空答案/拒答在可答题上直接判 INCORRECT（不调 LLM，省一次调用） */
+    /**
+     * 对照参考答案判正确性。三道短路，能不调模型就不调：
+     * <ol>
+     *   <li>空答案/拒答在可答题上直接判 INCORRECT——规则就能定的事不花 token，
+     *       且拒答文本永远不会被裁判误判成 CORRECT（自洽）；</li>
+     *   <li>输出解析用 contains("CORRECT") && !contains("INCORRECT")：因为
+     *       "INCORRECT" 字面包含 "CORRECT" 子串，先判 CORRECT 会把 INCORRECT
+     *       误读成通过——必须显式排除，这是 LLM 输出解析的经典坑；</li>
+     *   <li>调用异常/空返回 → JUDGE_ERROR：裁判故障与被测系统故障分开记账，
+     *       token 记 -1/0 也能从数据上区分"没调成"和"调了很便宜"。</li>
+     * </ol>
+     * prompt 设计：只要求输出一行 CORRECT/INCORRECT 且禁止解释——解释会引入
+     * 措辞漂移（同答案不同措辞被判不同），二值输出是抑制裁判方差的手段。
+     *
+     * @param question 被测问题
+     * @param expected 数据集参考答案（判对的唯一Ground Truth）
+     * @param actual   生成系统的实际回答
+     * @return 裁决 + 裁判自身 token 消耗（成本记账要连裁判一起算）
+     */
     public Outcome judge(String question, String expected, String actual) {
         if (actual == null || actual.isBlank() || actual.startsWith("无法回答")) {
             return new Outcome("INCORRECT");
@@ -97,7 +128,11 @@ public class EvalJudge {
         }
     }
 
-    /** run 快照里显示的裁判身份 */
+    /**
+     * run 快照里显示的裁判身份：模型名 + 是否同模型裁判。
+     * 写进 run 头让"这个数字是谁打的"可追溯——换裁判 = 换标尺，跨 run 对比时
+     * judge 字段不一致就说明指标不可直接比，与 datasetVersion 拦截同理。
+     */
     public String describe() {
         return modelName + (sameAsGenerator ? " (same-as-generator ⚠self-preference)" : " (independent)");
     }

@@ -166,6 +166,16 @@ public class EvalService {
         return runId;
     }
 
+    /**
+     * 子集解析（三选一优先级：错题本 > smoke > 全量）：
+     * <ul>
+     *   <li>onlyFailedFrom：读 parent run 的 JSONL，取 FAIL/HALLUCINATED/ERROR 的 caseId，
+     *       并硬编码排除 held-out——调优循环永远碰不到考卷，防"用考卷题调参"的指标自欺；</li>
+     *   <li>smoke：固定种子 Random(42) 抽 20 题——每次跑同一批，改一个变量后
+     *       冒烟结果才可直接对比；也只在非 held-out 池里抽；</li>
+     *   <li>全量：基线/最终回归用。</li>
+     * </ul>
+     */
     private List<QaCase> resolveSubset(List<QaCase> all, String onlyFailedFrom, boolean smoke) {
         if (onlyFailedFrom != null && !onlyFailedFrom.isBlank()) {
             Set<String> failedIds = store.readCases(onlyFailedFrom).stream()
@@ -183,6 +193,10 @@ public class EvalService {
         return all;
     }
 
+    /**
+     * runId = 时间戳-标签-短UUID：人读能排序/认标签，UUID 防同秒重名覆盖；
+     * 标签先洗掉非安全字符（会直接用作 JSONL 文件名，见 EvalRunStore 的非法字符拦截）。
+     */
     private String makeRunId(String tag, String onlyFailedFrom) {
         String base = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"));
         String kind = tag != null && !tag.isBlank()
@@ -191,6 +205,18 @@ public class EvalService {
         return base + "-" + kind + "-" + UUID.randomUUID().toString().substring(0, 4);
     }
 
+    /**
+     * 后台主循环（单线程，在 eval-run 线程上执行）：
+     * <ol>
+     *   <li>先整批 validate（锚点回原文定位）：过期题直接写 QUARANTINED 行，
+     *       不消耗任何 LLM 调用——"防止过期题目驱动你去修一个没坏的系统"；</li>
+     *   <li>逐题 hasCase 检查 → 已有结果跳过：这就是断点续跑的全部实现（追加写+
+     *       文件即进度）；单题异常写 ERROR 行继续跑，不因一题崩全 run；</li>
+     *   <li>末尾补 summary 归档行（读取时重算不依赖它，仅为人工翻文件方便）。</li>
+     * </ol>
+     * 注意：config 快照在 startRun 写 run 头时已固定，这里只追加 case 行——
+     * 跑批中途改配置不影响已落盘行，但也不影响后续行（读的是启动时的字段值副本）。
+     */
     private void execute(String runId, List<QaCase> subset) {
         Map<String, DatasetService.ValidationItem> validation = datasetService.validate(subset);
         for (QaCase c : subset) {
@@ -221,6 +247,24 @@ public class EvalService {
         log.info("评测 run 完成: {} ({} cases)", runId, store.readCases(runId).size());
     }
 
+    /**
+     * 单题执行（评测机最小闭环，一次检索+一次生成+最多一次裁判）：
+     * <ol>
+     *   <li>检索一次两用：既落三路分数+evidenceHit 现场快照（归因依据），
+     *       又复用给生成——省一半 embedding 调用，且保证"快照即生成用的那份上下文"；</li>
+     *   <li>判定矩阵（四分支，面试可画表）：
+     *       <pre>
+     *       应拒答题 × 真拒答 → REFUSED_OK ／ × 答了 → HALLUCINATED（最严重）
+     *       可回答题 × 误拒答 → FAIL（不调 Judge，拒答就是错）
+     *                × 答了   → LLM-as-Judge：CORRECT→PASS / JUDGE_ERROR→ERROR / 其他→FAIL
+     *       </pre>
+     *       Judge 只在"双方都认同需要语义判断"的场景消耗 token，规则能定的不花钱；</li>
+     *   <li>failureLayer 由 FailureAnalyzer 纯规则推导（检索没召回/误拒答/生成错），
+     *       不额外调模型——归因必须比被归因的对象便宜且确定；</li>
+     *   <li>整题现场（问题/期望/答案/三路分数/token 四类记账）一次性 append 落盘，
+     *       flush 到 OS——中断不丢已完成题。</li>
+     * </ol>
+     */
     private void runCase(String runId, QaCase c) {
         long t0 = System.currentTimeMillis();
 

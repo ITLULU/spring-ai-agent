@@ -16,6 +16,11 @@ public record QueryResponse(
         int promptTokens,
         int completionTokens) {
 
+    /**
+     * 一条可回查的引用：no 对应提示词里的 [n]，chunkId 可回 ChunkStore 取完整原文，
+     * snippet 取子块 content 前 120 字——忠实度评测（答案句是否真被引用块支撑）
+     * 的校验锚点就是它。
+     */
     public record Citation(int no, String chunkId, String source, String snippet) {
     }
 }

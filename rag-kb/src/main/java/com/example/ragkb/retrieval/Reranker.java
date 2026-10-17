@@ -12,5 +12,15 @@ import java.util.List;
  */
 public interface Reranker {
 
+    /**
+     * 精排契约：输入融合后的候选（已按粗略名次排序），输出重新打分的前 topN。
+     * <p>实现约束：返回数 ≤ topN（不足全给）；候选必须按相关性降序；
+     * 每条命中应通过 withRerank 携带精排分（null 表示未精排，展示为 n/a），
+     * 原始三路分数保持不变——评测归因要对比"rerank 前后名次变化"。
+     *
+     * @param query      原始问句（cross-encoder 需要 query-doc 拼对，不是重新编码 doc）
+     * @param candidates 待精排候选（注意可能是 subList 视图，实现方不得修改）
+     * @param topN       最终保留数（= rag.retrieval.final-k，喂 LLM 的上下文预算）
+     */
     List<RetrievedChunk> rerank(String query, List<RetrievedChunk> candidates, int topN);
 }

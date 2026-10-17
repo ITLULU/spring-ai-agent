@@ -15,6 +15,10 @@ public record RetrievedChunk(
         double fusedScore,
         Double rerankScore) {
 
+    /**
+     * 不可变更新：生成带精排分的新 record，三路原始分原样保留（便于 rerank 前后对比）。
+     * rerankScore 用包装类 Double 而非 double：null 语义 = 未精排，区别于精排出 0 分。
+     */
     public RetrievedChunk withRerank(double score) {
         return new RetrievedChunk(chunkId, content, generationContent, source,
                 vectorScore, bm25Score, fusedScore, score);

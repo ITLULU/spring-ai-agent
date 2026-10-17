@@ -44,6 +44,11 @@ public class QaService {
         this.chatModel = chatModel;
     }
 
+    /**
+     * 线上主入口：检索 + 生成一体（自己调混合检索拿上下文）。
+     * @param question 用户问句
+     * @return 答案 + 是否拒答 + 引用列表 + 时延/token 记账（见 QueryResponse）
+     */
     public QueryResponse answer(String question) {
         return answer(question, retrieval.retrieve(question));
     }
@@ -51,6 +56,20 @@ public class QaService {
     /**
      * 评测专用重载：接受预取检索结果，避免 eval 为拿检索快照而重复调用 embedding。
      * 线上链路（answer(question)）行为不变。
+     * <p>内部五步（两防线的第二道在这里）：
+     * <ol>
+     *   <li>防线 1·检索层拒答：候选为空或最佳向量分 &lt; 阈值 → 直接返回拒答，
+     *       零 token 成本、零幻觉风险；elapsedMs 照常记录（拒答也是一次线上行为）；</li>
+     *   <li>编号上下文装配：喂 LLM 的是 generationContent（parent-child 时=父块全文，
+     *       保上下文完整），而 citation 里的 snippet 取 content（子块，命中单元）——
+     *       检索单元与生成单元分离但引用可回查到子块，忠实度校验的锚点是子块；</li>
+     *   <li>提示层约束：system 四规则把答案钉死在"只准引用编号上下文"上，
+     *       [n] 标注使后验校验（越界/是否真支撑）成为可能；</li>
+     *   <li>模型主动拒答识别：输出以"无法回答"开头也归为 refused（防线 2 生效），
+     *       并清空 citations——拒答不应带引用；</li>
+     *   <li>记账：prompt/completion tokens 从响应 metadata 取，供应商未返回时记 -1
+     *       （评测机汇总时把 -1 当未知处理，不能当 0 掩盖问题）。</li>
+     * </ol>
      */
     public QueryResponse answer(String question, List<RetrievedChunk> chunks) {
         long start = System.currentTimeMillis();
@@ -60,7 +79,7 @@ public class QaService {
             return new QueryResponse(REFUSAL, true, List.of(), System.currentTimeMillis() - start, 0, 0);
         }
 
-        // 组装编号上下文
+        // 组装编号上下文：[n] + 来源名 + 生成文本；citation 另存子块 snippet 供人工/程序回查
         StringBuilder context = new StringBuilder();
         List<QueryResponse.Citation> citations = new ArrayList<>();
         for (int i = 0; i < chunks.size(); i++) {
@@ -71,6 +90,7 @@ public class QaService {
             citations.add(new QueryResponse.Citation(no, c.chunkId(), c.source(), snippet));
         }
 
+        // 防线 2：提示层硬约束（规则 3 允许模型自己说"答不了"，与防线 1 双重兜底）
         String system = """
                 你是企业知识库助手。规则：
                 1. 只依据下面提供的编号上下文回答问题，禁止使用上下文之外的知识；

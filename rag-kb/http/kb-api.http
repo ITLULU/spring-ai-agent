@@ -34,6 +34,7 @@ Content-Type: application/json
 ### ------------------------------------------------------------
 
 ### 1.1 基础检索：看各路召回分数（vectorScore / bm25Score / fusedScore / rerankScore）
+###    期望：vectorScore > bm25Score > fusedScore > rerankScore
 POST {{host}}/api/retrieve
 Content-Type: application/json
 
