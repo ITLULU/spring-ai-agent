@@ -25,6 +25,12 @@ import com.example.ragkb.config.DataPath;
 @Service
 public class DocumentParserService {
 
+    /** 入库支持的扩展名白名单：目录批量入库（ING-01）按此过滤，避免把无关文件也灌进库 */
+    public static boolean isSupported(String name) {
+        String lower = name.toLowerCase(Locale.ROOT);
+        return lower.endsWith(".pdf") || lower.endsWith(".txt") || lower.endsWith(".md");
+    }
+
     public String parseToText(String path) throws IOException {
         // 多模块下工作目录可能是聚合根，相对路径统一解析到数据根目录（见 DataPath）
         Path p = DataPath.resolve(path);
