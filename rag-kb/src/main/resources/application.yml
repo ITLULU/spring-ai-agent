@@ -57,9 +57,9 @@ server:
 
 rag:
   vectorstore:
-    simple: true                  # false + -Pmilvus → 切到 MilvusVectorStore
+    simple: false                  # false + -Pmilvus → 切到 MilvusVectorStore
   chunk-store:
-    type: ${CHUNK_STORE_TYPE:memory}   # memory（默认，重启即空）| postgres（落库持久，重启后 warmup 自动重建 BM25）
+    type: ${CHUNK_STORE_TYPE:postgres}   # memory（默认，重启即空）| postgres（落库持久，重启后 warmup 自动重建 BM25）
   postgres:                       # 仅 type=postgres 时生效；生产用环境变量覆盖，勿写死密码
     url: ${PG_URL:jdbc:postgresql://localhost:5432/ragkb}
     username: ${PG_USER:postgres}
@@ -76,8 +76,8 @@ rag:
     hybrid: true                  # false → 纯向量（对照组）
     min-vector-similarity: 0.30   # 拒答阈值：漏答 vs 幻觉的权衡点，用评测集调
   rerank:
-    enabled: false                # true → 启用 TEI/托管 rerank API
-    base-url: ${RERANK_URL:http://localhost:8080/rerank}
+    enabled: true                # true → 启用 TEI/托管 rerank API -- GPU 版端口
+    base-url: ${RERANK_URL:http://localhost:8087/rerank}
   eval:
     dataset: data/eval/qa_v2/qa_v2.json   # 带 caseId/锚文本/heldOut 的 v2 测试集
     docs-dir: data/docs                   # 锚点校验时回读源文档用

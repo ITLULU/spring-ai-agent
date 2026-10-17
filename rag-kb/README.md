@@ -10,7 +10,7 @@
 | JDK | **21**（Temurin/Corretto 均可） | `java -version` 显示 21.x |
 | Maven | 3.9.x | `mvn -v` |
 | LLM API Key | 任一 OpenAI 兼容平台（DashScope / DeepSeek / OpenAI / SiliconFlow） | 见下方环境变量 |
-| Docker | **可选**——默认内存向量库零基建；仅第 3 周切 Milvus 时需要 | — |
+| Docker | **可选**——默认内存向量库零基建；切 Milvus/Postgres/Rerank 时需要，本机服务统一由 `E:\project\SpringCloudAdmin\docker-compose\` 管理（见下"本机 Docker 基建"节） | — |
 
 ## 快速开始
 
@@ -65,7 +65,7 @@ Markdown 报告由 `GET /api/eval/runs/{runId}/report` 从 JSONL 渲染——这
 | `AI_CHAT_MODEL` / `AI_EMBED_MODEL` | chat/embedding options.model | `qwen-plus` / `text-embedding-v3` | 换模型 |
 | `EVAL_JUDGE_MODEL` | rag.eval.judge.model | 空=复用 chat（启动 WARN） | 消除 self-preference |
 | `EVAL_JUDGE_API_KEY` / `EVAL_JUDGE_BASE_URL` | rag.eval.judge.* | 回落主配置 | 裁判用另一家平台时 |
-| `RERANK_URL` | rag.rerank.base-url | `http://localhost:8080/rerank` | 配合 `rag.rerank.enabled=true` 接托管 rerank API |
+| `RERANK_URL` | rag.rerank.base-url | `http://localhost:8080/rerank` | 配合 `rag.rerank.enabled=true` 接托管 rerank API；**本机自建 TEI 在 8086**，需覆盖（见"本机 Docker 基建"） |
 | `MILVUS_HOST` / `MILVUS_PORT` | vectorstore.milvus.client.* | `localhost` / `19530` | 切 Milvus |
 | `CHUNK_STORE_TYPE` | rag.chunk-store.type | `memory` | `postgres` → chunk 语料落库，重启不丢（见“持久化部署”） |
 | `PG_URL` / `PG_USER` / `PG_PASSWORD` | rag.postgres.* | `jdbc:postgresql://localhost:5432/ragkb` / `postgres` / `postgres` | 仅 postgres 模式生效 |
@@ -352,9 +352,27 @@ idf(t)     = ln(1 + (N - df + 0.5) / (df + 0.5))
 | `web` | 端点含纯检索调试（可传 evidence 参数看命中标记） | 归因分析方法论 |
 | `mcp` | @Tool 包装 Service 为 MCP 工具（REST/MCP 双传输同一实现） | Agent 生态接入、HITL 工具设计 |
 
+## 本机 Docker 基建（统一托管，仓库不内置 compose）
+
+本仓库不留 docker-compose.yml——Milvus / Postgres / Rerank 等基础设施统一放在本机
+`E:\project\SpringCloudAdmin\docker-compose\`，按服务子目录拆分，每个子目录内含独立的
+`docker-compose.yml` + `start.sh`，进目录 `docker compose up -d` 即启：
+
+| 服务 | 子目录 | 关键端口 | rag-kb 用法 |
+|---|---|---|---|
+| Milvus standalone（v2.4.9，连带 etcd/minio） | `milvus/` | 19530 (gRPC) / 9091 | 向量持久化：`-Pmilvus` + `rag.vectorstore.simple=false` |
+| Postgres（pgvector/pg16） | `postgres/` | 5432 | ChunkStore 落库：`rag.chunk-store.type=postgres`；连接串指向 **ragkb 库**（表由应用启动自建），凭据 postgres/postgres 与 application.yml 默认值一致 |
+| Rerank TEI CPU 版（BAAI/bge-reranker-v2-m3） | `rerank/` | **8086**（8080 被其它服务占用） | 需设 `RERANK_URL=http://localhost:8086/rerank` + `rag.rerank.enabled=true`，否则默认 8080 连不通 |
+| Rerank GPU 版 | `rerank-gpu/` | 见其 yml | 同上的加速替身（需 GPU） |
+
+> 验证基建就绪：`docker ps` 应看到 milvus-standalone / postgres（healthy）；rerank 可选。
+> 首次拉模型约 2GB 到 `rerank/data`，TEI 健康检查宽限 120s，属正常。
+> 注：旧版 TEI 镜像（cpu-1.5）因 HF 改返相对 307 Location 会无限重启循环——若 rerank 状态为 Restarting，
+> 进 `rerank/` 目录 `docker compose up -d` 用 cpu-1.9 镜像重建即可。
+
 ## 切到 Milvus（向量持久化）
 
-前提：本机已有运行中的 Milvus standalone（`localhost:19530`，需同时跑 etcd/minio；仓库不再内置 compose 文件，容器自行管理）。
+前提：Milvus standalone 运行中（`localhost:19530`，启停见上节 `milvus/` 子目录）。
 
 ```bash
 mvn -Pmilvus spring-boot:run -Dspring-boot.run.arguments=--rag.vectorstore.simple=false
@@ -383,7 +401,7 @@ mvn -Pmilvus spring-boot:run -Dspring-boot.run.arguments=--rag.vectorstore.simpl
 | BM25 索引 | 进程内倒排 | 重启时由 `StoreWarmupRunner` 从 ChunkStore 自动重建 |
 
 ```powershell
-# 前提：Postgres 实例就绪（库需存在，表由应用启动时自建）。用 pgvector 镜像亦可。
+# 前提：Postgres 就绪（启停见"本机 Docker 基建"节 postgres/ 子目录；库需存在，表由应用启动时自建）
 docker start postgres   # 或你自己的实例，用 PG_URL/PG_USER/PG_PASSWORD 覆盖
 mvn -Pmilvus spring-boot:run "-Dspring-boot.run.arguments=--rag.vectorstore.simple=false --rag.chunk-store.type=postgres"
 ```
