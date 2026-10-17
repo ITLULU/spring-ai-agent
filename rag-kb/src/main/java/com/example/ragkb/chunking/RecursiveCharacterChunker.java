@@ -3,7 +3,6 @@ package com.example.ragkb.chunking;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -65,13 +64,13 @@ public class RecursiveCharacterChunker implements ChunkingStrategy {
         int index = 0;
         for (String piece : pieces) {
             if (buffer.length() > 0 && buffer.length() + piece.length() > size) {
-                chunks.add(new Chunk(UUID.randomUUID().toString(), buffer.toString().trim(), source, index++, Map.of()));
+                chunks.add(new Chunk(Chunk.stableId(source, index, buffer.toString().trim()), buffer.toString().trim(), source, index++, Map.of()));
                 buffer.setLength(0);
             }
             buffer.append(piece);
         }
         if (!buffer.isEmpty()) {
-            chunks.add(new Chunk(UUID.randomUUID().toString(), buffer.toString().trim(), source, index, Map.of()));
+            chunks.add(new Chunk(Chunk.stableId(source, index, buffer.toString().trim()), buffer.toString().trim(), source, index, Map.of()));
         }
         return chunks;
     }

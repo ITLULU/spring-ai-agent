@@ -3,7 +3,6 @@ package com.example.ragkb.chunking;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -53,7 +52,7 @@ public class FixedSizeChunker implements ChunkingStrategy {
             int end = Math.min(normalized.length(), start + size);
             String piece = normalized.substring(start, end).trim();
             if (!piece.isEmpty()) {
-                chunks.add(new Chunk(UUID.randomUUID().toString(), piece, source, index++, Map.of()));
+                chunks.add(new Chunk(Chunk.stableId(source, index, piece), piece, source, index++, Map.of()));
             }
             if (end == normalized.length()) {
                 break;

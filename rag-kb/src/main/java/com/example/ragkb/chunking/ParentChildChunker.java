@@ -4,7 +4,6 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -71,9 +70,9 @@ public class ParentChildChunker implements ChunkingStrategy {
             parents.add(current.toString());
         }
 
-        // 2. parent 内切 child，child 携带 parent 全文
+        // 2. parent 内切 child，child 携带 parent 全文（id/parentId 均确定性生成，保证幂等入库）
         for (String parent : parents) {
-            String parentId = UUID.randomUUID().toString();
+            String parentId = Chunk.stableId(source, parentIndex, "parent:" + parent);
             for (int start = 0; start < parent.length(); start += childChars) {
                 int end = Math.min(parent.length(), start + childChars);
                 String childText = parent.substring(start, end).trim();
@@ -83,7 +82,7 @@ public class ParentChildChunker implements ChunkingStrategy {
                 Map<String, Object> meta = new HashMap<>();
                 meta.put("parentId", parentId);
                 meta.put("parentContent", parent);
-                children.add(new Chunk(UUID.randomUUID().toString(), childText, source, parentIndex, meta));
+                children.add(new Chunk(Chunk.stableId(source, parentIndex, childText), childText, source, parentIndex, meta));
             }
             parentIndex++;
         }
