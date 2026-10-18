@@ -1,0 +1,16 @@
+# GPU 版 rerank overlay（台式机等有 NVIDIA GPU 的机器用；CPU 机器直接用 docker-compose.yml 即可）。
+# 前提：NVIDIA 驱动 + nvidia-container-toolkit（Docker Desktop 开启 WSL2 GPU 支持亦可）。
+# 用法（在 rag-kb/ 目录）：
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml --profile rerank up -d
+# 端口仍是 8087:80，与 application.yml RERANK_URL 默认值一致，应用侧零改动。
+# GPU 镜像启动比 CPU 版快且精度高（bge-reranker-v2-m3 全量权重 forward pass）。
+services:
+  rerank:
+    image: ghcr.io/huggingface/text-embeddings-inference:1.9   # GPU 版（非 cpu- 前缀镜像）
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

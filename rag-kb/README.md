@@ -484,6 +484,8 @@ application.yml 默认值对齐，clone 后即可拉起：
 cd rag-kb
 docker compose up -d                      # Milvus(19530) + Postgres(5432/ragkb)
 docker compose --profile rerank up -d     # 追加 CPU 版 rerank（8087）
+# 有 NVIDIA GPU 的机器用 GPU 版 rerank（精度/速度更好，端口不变）：
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml --profile rerank up -d
 ```
 
 | 服务 | compose 端口 | 关键配置 |
