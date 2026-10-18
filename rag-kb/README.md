@@ -31,7 +31,7 @@ cd rag-kb; mvn spring-boot:run
 ```
 
 **启动成功判定**：日志出现 `Tomcat started on port 8000`；`GET http://localhost:8000/api/eval/runs` 返回 `[]`；
-MCP 端点 `http://localhost:8000/sse` 可建立 SSE 连接。
+MCP 端点 `POST http://localhost:8000/mcp`（Streamable HTTP）可完成 initialize 握手。
 
 > ⚠️ **Windows 用户注意**：PowerShell 里 `curl` 是 `Invoke-WebRequest` 别名，本 README 所有示例请写全
 > `curl.exe`；且 PowerShell 5.1 默认 GBK 编码会把请求体里的中文变成乱码字节（表现为"检索全不命中"的
@@ -131,7 +131,7 @@ Markdown 报告由 `GET /api/eval/runs/{runId}/report` 从 JSONL 渲染——这
 
 ```powershell
 mvn -pl rag-kb test          # 33 个单元/契约测试（切块含确定性id/BM25+RRF/入库幂等与目录批量/评测存档/失败归因/MCP 工具契约）
-pwsh scripts/mcp-probe.ps1   # MCP 最小客户端演练：SSE 握手→initialize→tools/list→tools/call
+powershell -ExecutionPolicy Bypass -File scripts/mcp-probe.ps1   # MCP 最小客户端演练（Streamable）：initialize→tools/list→tools/call
 ```
 
 `RagKbToolsTest.toolCallbacksExposeExactContract` 守护对外 10 个工具的 name/description/参数 schema——
@@ -142,20 +142,22 @@ pwsh scripts/mcp-probe.ps1   # MCP 最小客户端演练：SSE 握手→initiali
 > 代码：`mcp/RagKbTools.java`（工具定义）+ `mcp/McpServerConfig.java`（装配）+ `application.yml` 的 `spring.ai.mcp.server` 块。
 
 同一个 Service 层现在有两种传输形态：REST（人/脚本调）+ **MCP**（LLM/Agent 自动发现调用），
-两者共享同一套 Service，互不重复。启动后任意 MCP 客户端（Claude Desktop / Cursor / Qoder）连 SSE 端点即可：
+两者共享同一套 Service，互不重复。启动后任意 MCP 客户端（Claude Desktop / Cursor / Qoder）连
+Streamable HTTP 端点即可（PRO-01：旧 SSE 传输已被 MCP 规范废弃，2026-10 已迁移）：
 
 ```json
-{ "mcpServers": { "rag-kb": { "url": "http://localhost:8000/sse" } } }
+{ "mcpServers": { "rag-kb": { "type": "http", "url": "http://localhost:8000/mcp" } } }
 ```
 
 ### 1. 封装全景：一次 MCP 调用穿过哪几层
 
 ```
 MCP 客户端(Claude/Cursor/Qoder)
-   │ SSE 连 /sse，JSON-RPC 消息 POST 到 /mcp/message?sessionId=xxx，响应从 SSE 流推回
+   │ 所有 JSON-RPC 消息 POST 到单一端点 /mcp；会话由响应头 Mcp-Session-Id 维系；
+   │ Accept 同时声明 json+event-stream，服务端可选 SSE 帧推多消息（单请求单响应时直接 JSON）
    ▼
 ┌─────────────────────────────────────────────────────┐
-│ ① pom 依赖 spring-ai-starter-mcp-server-webmvc      │ ← 传输层全由它装配（SSE/JSON-RPC/会话）
+│ ① pom 依赖 spring-ai-starter-mcp-server-webmvc      │ ← 传输层全由它装配（Streamable/JSON-RPC/会话）
 ├─────────────────────────────────────────────────────┤
 │ ② McpServerConfig：ToolCallbackProvider Bean          │ ← 唯一胶水，一行 builder，声明"对外暴露什么"
 ├─────────────────────────────────────────────────────┤
@@ -176,8 +178,8 @@ MCP 客户端(Claude/Cursor/Qoder)
 </dependency>
 ```
 
-自动配置的触发条件就是"容器里出现 `ToolCallbackProvider` Bean"。SSE 端点、`/mcp/message` 回调、
-`initialize / tools/list / tools/call` 的 JSON-RPC 分发、会话管理——手写代码量为**零**。
+自动配置的触发条件就是"容器里出现 `ToolCallbackProvider` Bean"。单一 `/mcp` 端点、`Mcp-Session-Id` 会话管理、
+`initialize / tools/list / tools/call` 的 JSON-RPC 分发——手写代码量为**零**。
 
 **零件② 装配：一个 Bean 声明能力清单**（`McpServerConfig`，整个类就这一个方法）
 
@@ -233,9 +235,11 @@ REST/MCP 两种形态服务、且测试/评测不用维护两套的前提。
 spring.ai.mcp.server:
   enabled: true
   name: rag-kb-mcp-server
-  protocol: SSE          # ⚠️ 规范已废弃 SSE 传输，演进方向 Streamable HTTP（清单 PRO-01）
-  sse-endpoint: /sse
-  sse-message-endpoint: /mcp/message
+  version: 0.1.0
+  protocol: STREAMABLE   # 枚举 SSE | STREAMABLE | STATELESS（已从 starter 1.1.3 元数据核实）；PRO-01 已落地
+  type: SYNC
+  streamable-http:
+    mcp-endpoint: /mcp   # starter 默认值，显式写出便于阅读；会话靠响应头 Mcp-Session-Id 维系
   instructions: >-       # 服务端"使用指南"，随 initialize 结果返回给客户端
     rag-kb 企业知识库 MCP Server：用 kb_query 提问制度文档（带引用溯源）...
 ```
@@ -260,18 +264,18 @@ spring.ai.mcp.server:
 
 1. `RagKbTools` 加一个 `@Tool` 方法，内部只调已有 Service；
 2. `RagKbToolsTest` 的 `EXPECTED_TOOLS` 名字集合加上新工具（不加会红——测试锁集合相等而非包含）；
-3. 客户端重连 `/sse` 自动发现，REST 端点如需同步暴露再另加 Controller。
+3. 客户端重连 `/mcp` 自动发现，REST 端点如需同步暴露再另加 Controller。
 
 ### 5. 验证：两种手段 + 一条启动 WARN 的真相
 
 ```powershell
-pwsh scripts/mcp-probe.ps1    # 需 PowerShell 7：模拟最小客户端 SSE握手→initialize→tools/list→tools/call 真执行一次守门校验
+powershell -ExecutionPolicy Bypass -File scripts/mcp-probe.ps1   # 5.1/7 均可：模拟最小客户端 initialize→tools/list→tools/call 真执行一次守门校验
 ```
 
-或用 curl 手动握手（理解协议的最好方式）：
-1. `GET /sse` 保持连接 → 收到 `event:endpoint` + `data:/mcp/message?sessionId=xxx`；
-2. `POST /mcp/message?sessionId=xxx` 发 `initialize`（HTTP 202，JSON-RPC 响应从 SSE 流推回）→ 再发 `notifications/initialized` → `tools/list`；
-3. 读 SSE 流里的响应，能看到全部 10 个工具的 name/description/inputSchema。
+或用 curl 手动握手（理解协议的最好方式，Streamable 单端点三步）：
+1. `POST /mcp` 发 `initialize`（`Accept: application/json, text/event-stream`）→ 响应头携 `Mcp-Session-Id`，体内含 serverInfo/capabilities；
+2. 后续请求带 `Mcp-Session-Id` 头：`notifications/initialized` → `tools/list` → `tools/call`；
+3. `tools/list` 响应可看到全部 10 个工具的 name/description/inputSchema。
 
 启动日志的 `WARN SyncMcpToolProvider: No tool methods found in the provided tool objects: []` 是**无害噪音**：
 starter 内部另有一条"直接工具对象"注册路径，本项目工具走的是 `ToolCallbackProvider` Bean（零件②），
@@ -281,11 +285,11 @@ starter 内部另有一条"直接工具对象"注册路径，本项目工具走�
 
 - MCP 解决的痛点：M 个工具×N 个模型的 M×N 定制集成 → 标准化为 M+N（工具只需实现一次 MCP Server，任意客户端可接）；
 - 与 Function Calling 的关系：不是竞品是分层——FC 是模型厂商的"选工具"能力（私有格式），MCP 是工具供给的开放协议；Agent 客户端把 tools/list 翻译进模型的 FC 菜单，选工具仍是模型的事；
-- 一次 tools/call 的完整往返：SSE 长连接下行推响应，消息走 POST 上行（双通道），sessionId 维系会话——为什么不用纯轮询/纯 WebSocket：JSON-RPC 语义 + 防火墙友好；
+- 一次 tools/call 的往返设计演进：旧 SSE 传输是双通道（SSE 长连接下行推响应 + POST /mcp/message 上行），Streamable HTTP 收敛为单一 `/mcp` 端点——单请求单响应直接 JSON 返回，需要服务端推多条时才升级 SSE 帧；会话从 URL 里的 sessionId 改为 `Mcp-Session-Id` 头，无状态客户端可以完全不用会话；
 - description 是 prompt engineering 的一部分：工具选择准确率取决于文案的"何时用/何时不用"边界表达，不是功能罗列；
 - 循环依赖的 @Lazy 断环：不阉割"模型自己调工具"能力，只在消费点延迟解析；
 - HITL 的工具层表达：`judge_error_record` 的 description 禁止 Agent 自行调用，人在回路闸门写进协议元数据；
-- 演进：SSE 传输已被规范废弃（PRO-01），迁 Streamable HTTP 后本项目只改 starter 依赖与 yml，工具代码零改动——接口不变、实现替换的又一次兑现。
+- 演进落地：SSE 传输被规范废弃（PRO-01），本项目 2026-10 已切 Streamable HTTP——实际改动只有 yml 三行 + 探针脚本握手流程，`RagKbTools`/`McpServerConfig` 零改动——"接口不变、实现替换"的又一次兑现（枚举里还留着 STATELESS，无会话部署是下一个可选形态）。
 
 ## 架构与核心决策（面试对着这节讲）
 
@@ -580,7 +584,7 @@ rag-kb/
 | 评测分数比上一轮莫名下降 | 先查 warmup 日志 BM25 是否空（内存模式重启未重灌）；语料翻倍已不可能（ING-02 幂等已修），再看三路分数归因 |
 | 切 Milvus 后启动失败 | Maven profile 没生效（IDEA 未勾选/未 Reload）或维度未对齐（见"切到 Milvus"第 1 条） |
 | postgres 模式启动报连不上库 | Postgres 实例/库不存在（表会自建、库不会）；检查 PG_URL 与容器状态 |
-| 启动日志 WARN `SyncMcpToolProvider: No tool methods found in the provided tool objects: []` | 无害噪音：starter 内部还有一条"直接工具对象"注册路径，本项目工具走的是 `ToolCallbackProvider` Bean（McpServerConfig），那条路径扫到空才打 WARN；实测 `tools/list` 返回全部 10 个工具（可用 scripts/mcp-probe.ps1 验证，需 PowerShell 7 的 `pwsh`） |
+| 启动日志 WARN `SyncMcpToolProvider: No tool methods found in the provided tool objects: []` | 无害噪音：starter 内部还有一条"直接工具对象"注册路径，本项目工具走的是 `ToolCallbackProvider` Bean（McpServerConfig），那条路径扫到空才打 WARN；实测 `tools/list` 返回全部 10 个工具（可用 scripts/mcp-probe.ps1 验证，Streamable 版 5.1/7 均可跑） |
 | 评测中途要改配置重跑 | run 由守护线程执行、无优雅停机——kill 后用 `{"resumeRunId":"…"}` 断点续跑 |
 
 ## TODO（学习路线附带任务，编号关联 docs/rag-kb企业级问题排查清单.md）
@@ -591,5 +595,5 @@ rag-kb/
 - [x] ChunkStore 落库（Postgres）+ 启动 warmup（DAT-01 已根治，见"持久化部署"节）；十万级演进路线见 `docs/评测机增强实施方案.md` §8
 - [ ] 评测集扩到 100 条（反向出题法，见 `QaCase` 注释；现 36 题：主集 26 + held-out 10，含 10 道对抗题）
 - [ ] RAGAS 指标对照：用 Python RAGAS 跑同一测试集，校准自建 Judge
-- [ ] MCP 传输切 Streamable HTTP（SSE 已被规范废弃，PRO-01）；ChatClient/ChatMemory 化（AGT-01/02）
+- [x] MCP 传输切 Streamable HTTP（PRO-01，2026-10 完成：protocol=STREAMABLE，探针实测 tools/list 10 工具 + tools/call 真执行）；ChatClient/ChatMemory 化（AGT-01/02）仍待做
 - [x] 把本系统封装成工具接入 Agent 生态（MCP Server 已完成，见"MCP 专题"节；接阶段2工单处理 Agent 待做）

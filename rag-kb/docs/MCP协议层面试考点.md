@@ -203,6 +203,9 @@ MCP 解决 **Agent ↔ 工具/数据** 的连接；A2A（Agent2Agent）解决 **
 
 ## 附：后续行动项
 
-- [ ] 基于 `spring-ai-starter-mcp-server-webmvc` 落地 rag-kb 的 MCP Server Demo：
-  `/api/query` 封装为 tool，`data/docs/*.md` 政策文档封装为 resource，
-  常用问答模板封装为 prompt——面试时"能跑通的 demo"比背概念更有说服力。
+- [x] 基于 `spring-ai-starter-mcp-server-webmvc` 落地 rag-kb 的 MCP Server Demo：已完成 tools 原语
+  （`RagKbTools` 10 个工具，含问答/检索/入库/评测机全链路）；传输已从旧 HTTP+SSE 双端点
+  切到 **Streamable HTTP**（`protocol: STREAMABLE`，单端点 `/mcp` + `Mcp-Session-Id`，2026-10-18，清单 PRO-01）——
+  本文档的考点与代码实现已对齐，面试可直接拿 mcp-probe.ps1 的握手输出当证据。
+- [ ] 补另两类原语：`data/docs/*.md` 政策文档封装为 **resource**、常用问答模板封装为 **prompt**
+  ——目前对外只暴露了 tools 一类，补齐后对三类原语的区分才有实操支撑。
