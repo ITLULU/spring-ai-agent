@@ -29,7 +29,8 @@ import com.example.ragkb.retrieval.RetrievedChunk;
 @Service
 public class QaService {
 
-    private static final String REFUSAL = "无法回答";
+    /** 拒答语全局唯一定义在 QueryResponse.REFUSAL，本类不再自设副本 */
+    private static final String REFUSAL = QueryResponse.REFUSAL;
 
     private final HybridRetrievalService retrieval;
     private final ChatModel chatModel;
@@ -102,13 +103,18 @@ public class QaService {
 
         ChatResponse chatResponse = chatModel.call(
                 new Prompt(List.of(new SystemMessage(system), new UserMessage(user))));
-        String raw = chatResponse.getResult().getOutput().getText();
+        String raw = chatResponse.getResult() == null || chatResponse.getResult().getOutput() == null
+                ? null : chatResponse.getResult().getOutput().getText();
         Usage usage = chatResponse.getMetadata() == null ? null : chatResponse.getMetadata().getUsage();
         int promptTokens = usage == null || usage.getPromptTokens() == null ? -1 : usage.getPromptTokens();
         int completionTokens = usage == null || usage.getCompletionTokens() == null ? -1 : usage.getCompletionTokens();
 
-        boolean refused = raw == null || raw.trim().startsWith(REFUSAL);
-        return new QueryResponse(raw, refused, refused ? List.of() : citations,
+        // 模型空响应按拒答处理：answer 落固定拒答语而非 null，
+        // 下游（报告/评测/MCP 客户端）拿到的永远是可渲染的字符串，不会见 NPE；
+        // 非空但命中拒答前缀的，保留原文（可能带拒答理由，供人工复核）
+        boolean refused = raw == null || raw.isBlank() || raw.trim().startsWith(REFUSAL);
+        String answer = raw == null || raw.isBlank() ? REFUSAL : raw;
+        return new QueryResponse(answer, refused, refused ? List.of() : citations,
                 System.currentTimeMillis() - start, promptTokens, completionTokens);
     }
 }

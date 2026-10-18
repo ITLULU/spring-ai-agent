@@ -7,10 +7,10 @@ import java.nio.file.Files;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 
 import org.springframework.beans.factory.annotation.Value;
@@ -35,7 +35,9 @@ public class DatasetService {
     private static final int PROBE_LEN = 24;
 
     private final ObjectMapper mapper = new ObjectMapper();
-    private final Map<String, String> docCache = new HashMap<>();
+    // ConcurrentHashMap：/api/dataset/validate（HTTP 线程）与 eval-run 线程可能并发读写，
+    // 裸 HashMap 的 computeIfAbsent 并发扩容是真实的数据竞态隐患
+    private final Map<String, String> docCache = new ConcurrentHashMap<>();
 
     @Value("${rag.eval.dataset:data/eval/qa_v2/qa_v2.json}")
     private String datasetPath;

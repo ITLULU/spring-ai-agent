@@ -16,6 +16,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 
+import com.example.ragkb.qa.QueryResponse;
+
 /**
  * LLM-as-Judge 二值判定（抑制打分漂移）。
  * 关键决策（《方案》§3.3）：Judge 默认复用生成模型——这是 self-preference 风险
@@ -99,7 +101,8 @@ public class EvalJudge {
      * @return 裁决 + 裁判自身 token 消耗（成本记账要连裁判一起算）
      */
     public Outcome judge(String question, String expected, String actual) {
-        if (actual == null || actual.isBlank() || actual.startsWith("无法回答")) {
+        // 拒答语引用全局常量（QueryResponse.REFUSAL），不在裁判层另拷一份字面量
+        if (actual == null || actual.isBlank() || actual.startsWith(QueryResponse.REFUSAL)) {
             return new Outcome("INCORRECT");
         }
         String prompt = """

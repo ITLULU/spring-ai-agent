@@ -1,5 +1,6 @@
 package com.example.contentagent.output;
 
+import com.example.contentagent.config.BasePath;
 import com.example.contentagent.config.ContentAgentProperties;
 import com.example.contentagent.model.PlatformArticle;
 import com.example.contentagent.model.PipelineResult;
@@ -39,7 +40,9 @@ public class FileOutputWriter {
     }
 
     public Path write(PipelineResult result) {
-        Path dir = Path.of(props.getOutputDir(), result.input().id());
+        // 相对输出目录走 BasePath 探测：聚合根启动时落点与输入目录同一数据根，
+        // 避免"读在模块目录、写在仓库根"的两套路径分裂
+        Path dir = BasePath.resolve(props.getOutputDir()).resolve(result.input().id());
         try {
             Files.createDirectories(dir);
 

@@ -1,7 +1,10 @@
 package com.example.contentagent.input;
 
+import com.example.contentagent.config.BasePath;
 import com.example.contentagent.config.ContentAgentProperties;
 import com.example.contentagent.model.ContentInput;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -20,16 +23,21 @@ import java.util.stream.Stream;
 @Component
 public class MarkdownReader {
 
+    private static final Logger log = LoggerFactory.getLogger(MarkdownReader.class);
+
     private final ContentAgentProperties props;
 
     public MarkdownReader(ContentAgentProperties props) {
         this.props = props;
     }
 
-    /** 读取目录下所有 markdown 文件。 */
+    /** 读取目录下所有 markdown 文件。目录不存在不再静默返回空表：WARN 暴露真实解析路径。 */
     public List<ContentInput> readAll() {
-        Path dir = Path.of(props.getInputDir());
+        Path dir = BasePath.resolve(props.getInputDir());
         if (!Files.isDirectory(dir)) {
+            log.warn("输入目录不存在: {}（CWD={}，相对路径基于 {} 解析；"
+                    + "可用 CONTENT_AGENT_BASE_DIR 指定数据根）",
+                    dir, Path.of(".").toAbsolutePath(), BasePath.baseDir());
             return List.of();
         }
         try (Stream<Path> walk = Files.list(dir)) {
@@ -43,11 +51,15 @@ public class MarkdownReader {
         }
     }
 
-    /** 按文件名读取单个 markdown。 */
+    /** 按文件名读取单个 markdown。文件名限纯名：含路径分隔符/.. 一律 400 拦截（防穿越）。 */
     public ContentInput readByName(String fileName) {
-        Path file = Path.of(props.getInputDir(), fileName);
+        if (fileName == null || fileName.isBlank()
+                || fileName.contains("/") || fileName.contains("\\") || fileName.contains("..")) {
+            throw new IllegalArgumentException("非法文件名（不允许路径分隔符/相对段）: " + fileName);
+        }
+        Path file = BasePath.resolve(props.getInputDir()).resolve(fileName);
         if (!Files.isRegularFile(file)) {
-            throw new IllegalArgumentException("找不到输入文件: " + file);
+            throw new IllegalArgumentException("找不到输入文件: " + file.toAbsolutePath());
         }
         return toInput(file);
     }

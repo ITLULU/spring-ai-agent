@@ -3,11 +3,13 @@ package com.example.ragkb.web;
 import java.util.List;
 import java.util.Map;
 
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 
 import com.example.ragkb.eval.DatasetService;
 import com.example.ragkb.ingest.IngestService;
@@ -44,8 +46,17 @@ public class KbController {
 
     @PostMapping("/ingest")
     public Map<String, Object> ingest(@RequestBody IngestRequest req) throws Exception {
-        int n = ingestService.ingest(req.path());
-        return Map.of("chunks", n, "strategy", ingestService.currentStrategy());
+        if (req == null || req.path() == null || req.path().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "path 不能为空");
+        }
+        IngestService.IngestResult r = ingestService.ingest(req.path());
+        var m = new java.util.LinkedHashMap<String, Object>();
+        m.put("chunks", r.chunks());
+        m.put("filesOk", r.filesOk());
+        m.put("filesFailed", r.filesFailed());
+        m.put("errors", r.errors());
+        m.put("strategy", ingestService.currentStrategy());
+        return m;
     }
 
     @PostMapping("/ingest/reset")
@@ -63,6 +74,7 @@ public class KbController {
     @PostMapping("/retrieve")
     public List<Map<String, Object>> retrieve(@RequestBody QueryRequest req,
                                               @RequestParam(required = false) String evidence) {
+        requireQuestion(req);
         String probe = evidence == null || evidence.isBlank() ? null
                 : DatasetService.probeOf(evidence);
         return retrievalService.retrieve(req.question()).stream()
@@ -86,6 +98,14 @@ public class KbController {
 
     @PostMapping("/query")
     public QueryResponse query(@RequestBody QueryRequest req) {
+        requireQuestion(req);
         return qaService.answer(req.question());
+    }
+
+    /** 入口参数拦截：空问句进检索链路只会浪费 token 并返回噪声结果，400 比 200 诚实 */
+    private static void requireQuestion(QueryRequest req) {
+        if (req == null || req.question() == null || req.question().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "question 不能为空");
+        }
     }
 }

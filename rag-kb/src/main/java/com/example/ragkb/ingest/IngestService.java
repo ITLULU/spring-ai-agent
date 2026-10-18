@@ -8,6 +8,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.beans.factory.annotation.Value;
@@ -26,6 +28,12 @@ import com.example.ragkb.store.ChunkStore;
 @Service
 public class IngestService {
 
+    private static final Logger log = LoggerFactory.getLogger(IngestService.class);
+
+    /** 批量入库结果：部分失败不再连坐丢弃已成功的写入，失败文件逐个上报 */
+    public record IngestResult(int chunks, int filesOk, int filesFailed, Map<String, String> errors) {
+    }
+
     private final DocumentParserService parser;
     private final VectorStore vectorStore;
     private final ChunkStore chunkStore;
@@ -34,11 +42,6 @@ public class IngestService {
 
     @Value("${rag.chunk.strategy:recursive}")
     private String strategyName;
-
-    @Value("${spring.ai.openai.api-key}")
-    private String openAiApiKey;
-    @Value("${spring.ai.openai.base-url}")
-    private String openAiBaseUrl;
 
     public IngestService(DocumentParserService parser, VectorStore vectorStore,
                          ChunkStore chunkStore, Bm25Index bm25Index,
@@ -53,9 +56,11 @@ public class IngestService {
     /**
      * 入库入口：单个文件直接灌；传目录则递归批量入库（ING-01）——
      * 按扩展名白名单过滤（pdf/txt/md），排序保证跨平台遍历顺序稳定，
-     * BM25 在全部文件写完后只重建一次（全量重建毫秒级，循环内重建是白费的 O(n²)）。
+     * BM25 在本批全部文件处理完后只重建一次（无论有无失败文件，已写入的部分不丢）。
+     * 逐文件 try/catch：单文件解析失败不再中断整批（旧行为会连坐丢弃已成功文件的
+     * 重建机会，留下"向量库已写、BM25 陈旧"的双索引分裂）。
      */
-    public int ingest(String path) throws IOException {
+    public IngestResult ingest(String path) throws IOException {
         Path dir = DataPath.resolve(path);
         if (Files.isDirectory(dir)) {
             List<Path> files;
@@ -69,15 +74,34 @@ public class IngestService {
                 throw new IllegalArgumentException("目录下没有支持的文件（pdf/txt/md）: " + dir);
             }
             int total = 0;
+            int ok = 0;
+            Map<String, String> errors = new HashMap<>();
             for (Path f : files) {
-                total += ingestFile(f.toString());
+                try {
+                    // source = 相对入库根目录的路径（统一 '/' 分隔）：
+                    // 只用裸文件名时，不同子目录的同名文件会碰撞——后一个的 removeBySource
+                    // 会把前一个的 chunk 删干净；相对路径在同一入库根下天然唯一
+                    String source = relativize(dir, f);
+                    total += ingestFile(f, source);
+                    ok++;
+                } catch (Exception e) {
+                    log.warn("文件入库失败（跳过不连坐）: {}", f, e);
+                    errors.put(relativize(dir, f), e.getClass().getSimpleName() + ": " + e.getMessage());
+                }
             }
             bm25Index.rebuildFrom(chunkStore);
-            return total;
+            return new IngestResult(total, ok, errors.size(), Map.copyOf(errors));
         }
-        int n = ingestFile(path);
+        Path file = dir;
+        int n = ingestFile(file, file.getFileName().toString());
         bm25Index.rebuildFrom(chunkStore);
-        return n;
+        return new IngestResult(n, 1, 0, Map.of());
+    }
+
+    /** 相对入库根的路径归一化：'\' → '/'，保证跨平台 source 一致 */
+    private static String relativize(Path root, Path file) {
+        String rel = root.relativize(file).toString().replace('\\', '/');
+        return rel.isEmpty() ? file.getFileName().toString() : rel;
     }
 
     /**
@@ -86,10 +110,8 @@ public class IngestService {
      * 切块策略/内容变更导致旧 id 对不上时，先删旧再写新也保证不残留。
      * 注意 BM25 不在此处重建，由 {@link #ingest} 统一收口。
      */
-    private int ingestFile(String path) throws IOException {
-        String text = parser.parseToText(path);
-        String source = path.substring(path.lastIndexOf('/') + 1);
-        source = source.substring(source.lastIndexOf('\\') + 1);
+    private int ingestFile(Path file, String source) throws IOException {
+        String text = parser.parseToText(file.toString());
 
         ChunkingStrategy strategy = strategies.get(strategyName);
         if (strategy == null) {

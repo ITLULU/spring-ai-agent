@@ -45,18 +45,28 @@ public class ContentPipeline {
     public PipelineResult run(ContentInput input) {
         log.info("[pipeline] 开始处理: {}", input.title());
 
-        ContentAnalysis analysis = analysisAgent.analyze(input);
+        // 结构化输出可能因模型不合规返回 null：在这里就fail-fast报清楚"哪个环节没产出"，
+        // 不留到下一环节拿 null 调方法时暴 NPE，调用方从错误信息里看到的是环节名而非堆栈猜测
+        ContentAnalysis analysis = require(analysisAgent.analyze(input), "分析 Agent(ContentAnalysisAgent)");
         log.info("[pipeline] 分析完成: coreTopic={}", analysis.coreTopic());
 
-        MonetizationPlan plan = monetizationAgent.plan(analysis);
+        MonetizationPlan plan = require(monetizationAgent.plan(analysis), "变现 Agent(MonetizationAgent)");
         log.info("[pipeline] 变现方案完成: {}", plan.planTitle());
 
-        PlatformArticle zhihu = zhihuWriterAgent.write(input, analysis);
+        PlatformArticle zhihu = require(zhihuWriterAgent.write(input, analysis), "知乎 Agent(ZhihuWriterAgent)");
         log.info("[pipeline] 知乎稿完成: {}", zhihu.title());
 
-        PlatformArticle wechat = wechatWriterAgent.write(input, analysis);
+        PlatformArticle wechat = require(wechatWriterAgent.write(input, analysis), "公众号 Agent(WechatWriterAgent)");
         log.info("[pipeline] 公众号稿完成: {}", wechat.title());
 
         return new PipelineResult(input, analysis, plan, zhihu, wechat, Instant.now());
+    }
+
+    private static <T> T require(T value, String stage) {
+        if (value == null) {
+            throw new IllegalStateException("Pipeline 环节无产出：" + stage
+                    + " 返回 null（多为模型未按结构化 schema 输出），检查其 prompt 与 -schema 约束");
+        }
+        return value;
     }
 }

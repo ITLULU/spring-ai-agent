@@ -1,0 +1,14 @@
+# 持久化基建模式（Postgres ChunkStore + rerank + 可选 Milvus）。
+# 激活：mvn spring-boot:run -Dspring-boot.run.profiles=persistent
+#       或 SPRING_PROFILES_ACTIVE=persistent java -jar rag-kb.jar
+# 前置条件：
+#   - PG：默认 localhost:5432/ragkb（可用 PG_URL/PG_USER/PG_PASSWORD 覆盖），建表幂等自动完成；
+#   - rerank：本地 TEI 或托管 API 需在 RERANK_URL 指向的端口存活（未存活时自动降级为融合名次，不再打挂 /api/query）；
+#   - Milvus 向量库：需 -Pmilvus 构建 + 本 profile（simple=false 只在 Milvus starter 在 classpath 时才有 VectorStore Bean）。
+rag:
+  vectorstore:
+    simple: false            # 配合 -Pmilvus 切 Milvus；未带 profile 构建时请勿保留此行
+  chunk-store:
+    type: postgres           # 重启后 BM25 由 StoreWarmupRunner 从 PG 自动重建
+  rerank:
+    enabled: true

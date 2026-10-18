@@ -12,7 +12,7 @@
 
     <artifactId>rag-kb</artifactId>
     <name>rag-kb</name>
-    <description>Production-grade RAG knowledge base (Spring AI + Milvus), with hybrid retrieval, rerank, citations, refusal and an eval harness</description>
+    <description>Production-pattern RAG knowledge base (Spring AI + Milvus): hybrid retrieval, rerank with real fallback, citations, refusal, eval harness. No auth/multi-instance yet — see README 已知局限</description>
 
     <properties>
         <pdfbox.version>3.0.4</pdfbox.version>

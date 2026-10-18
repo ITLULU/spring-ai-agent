@@ -35,7 +35,8 @@ public final class FailureAnalyzer {
      * @param c             测试用例（含是否应拒答）
      * @param evidenceHit   期望证据锚点是否出现在本次检索 Top-K 中
      * @param refused       系统是否输出了拒答
-     * @param judgeVerdict  LLM-as-Judge 结论（CORRECT/INCORRECT/JUDGE_ERROR/N/A）
+     * @param judgeVerdict  LLM-as-Judge 结论（CORRECT/INCORRECT/JUDGE_ERROR/NOT_JUDGED/N/A）；
+     *                      NOT_JUDGED=未调裁判（误拒答短路），归因优先看 refused 标志
      * @param citationValid 引用后验检查是否通过
      * @return FailureLayer 枚举名字符串，写入 JSONL 供错题本按层聚合
      */

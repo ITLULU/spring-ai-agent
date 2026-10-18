@@ -70,15 +70,18 @@ mvn spring-boot:run
 
 ### 4. 触发
 
+> ⚠️ **Windows PowerShell 用户**：`curl` 是 `Invoke-WebRequest` 别名，`-X`/`-H` 参数会直接报错——
+> 写全 `curl.exe`；含中文的请求体先 `chcp 65001`（或像下面 run-raw 那样存成 UTF-8 文件用 `--data-binary`）。
+
 ```powershell
 # 跑单篇指定文件
-curl -X POST "http://localhost:8001/api/agent/run?file=rag-hybrid-retrieval.md"
+curl.exe -X POST "http://localhost:8001/api/agent/run?file=rag-hybrid-retrieval.md"
 
-# 跑 data/ideas 下全部
-curl -X POST "http://localhost:8001/api/agent/run-all"
+# 跑 data/ideas 下全部（逐条容错：单篇失败不连坐，返回 total/succeeded/failed/errors）
+curl.exe -X POST "http://localhost:8001/api/agent/run-all"
 
-# 直接贴文本跑（不依赖本地文件）
-curl -X POST "http://localhost:8001/api/agent/run-raw" -H "Content-Type: application/json" --data "@payload.json"
+# 直接贴文本跑（不依赖本地文件；payload.json 需 UTF-8 编码）
+curl.exe -X POST "http://localhost:8001/api/agent/run-raw" -H "Content-Type: application/json" --data-binary "@payload.json"
 ```
 
 产出去 `data/output/{文件id}/` 拿，可直接复制到知乎/公众号后台微调发布。

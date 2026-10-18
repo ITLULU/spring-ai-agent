@@ -210,8 +210,8 @@ public class EvalService {
      * <ol>
      *   <li>先整批 validate（锚点回原文定位）：过期题直接写 QUARANTINED 行，
      *       不消耗任何 LLM 调用——"防止过期题目驱动你去修一个没坏的系统"；</li>
-     *   <li>逐题 hasCase 检查 → 已有结果跳过：这就是断点续跑的全部实现（追加写+
-     *       文件即进度）；单题异常写 ERROR 行继续跑，不因一题崩全 run；</li>
+     *   <li>续跑判定用开跑前单次扫描得到的 done 集合（逐题重读全文件是 O(n²)），
+     *       已有结果跳过；单题异常写 ERROR 行继续跑，不因一题崩全 run；</li>
      *   <li>末尾补 summary 归档行（读取时重算不依赖它，仅为人工翻文件方便）。</li>
      * </ol>
      * 注意：config 快照在 startRun 写 run 头时已固定，这里只追加 case 行——
@@ -219,8 +219,10 @@ public class EvalService {
      */
     private void execute(String runId, List<QaCase> subset) {
         Map<String, DatasetService.ValidationItem> validation = datasetService.validate(subset);
+        // 断点续跑：进循环前一次性取回已完成 caseId，循环内 O(1) 判定
+        Set<String> done = store.caseIds(runId);
         for (QaCase c : subset) {
-            if (store.hasCase(runId, c.caseId())) {
+            if (done.contains(c.caseId())) {
                 continue;   // 断点续跑：已有结果的题直接跳过
             }
             DatasetService.ValidationItem v = validation.get(c.caseId());
@@ -287,7 +289,9 @@ public class EvalService {
             verdict = resp.refused() ? CaseResult.REFUSED_OK : CaseResult.HALLUCINATED;
         } else if (resp.refused()) {
             verdict = CaseResult.FAIL;               // 误拒答：不调 Judge，直接错
-            judgeVerdict = "INCORRECT";
+            // 没调裁判就不得伪造成 INCORRECT：归因层靠 refused 判 FALSE_REFUSAL 不受影响，
+            // 但人读报告时"INCORRECT"会被误读成裁判投过票——NOT_JUDGED 才是事实
+            judgeVerdict = "NOT_JUDGED";
         } else {
             EvalJudge.Outcome outcome = judge.judge(c.question(), c.expectedAnswer(), resp.answer());
             judgeVerdict = outcome.verdict();

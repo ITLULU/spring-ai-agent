@@ -9,8 +9,11 @@ import java.nio.file.StandardOpenOption;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -26,6 +29,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  */
 @Component
 public class EvalRunStore {
+
+    private static final Logger log = LoggerFactory.getLogger(EvalRunStore.class);
 
     private final ObjectMapper mapper = new ObjectMapper();
 
@@ -98,7 +103,10 @@ public class EvalRunStore {
 
     public List<CaseResult> readCases(String runId) {
         try {
-            return readLines(runId).stream()
+            // 损坏行不再静默丢弃：WARN 留痕并计数——"文件里 100 行、读出来 97 条"
+            // 这种静默丢数据会直接污染指标，必须让人看得见
+            int[] dropped = {0};
+            List<CaseResult> cases = readLines(runId).stream()
                     .filter(l -> !l.isBlank())
                     .map(l -> {
                         try {
@@ -106,11 +114,40 @@ public class EvalRunStore {
                             return "case".equals(node.path("type").asText())
                                     ? mapper.readValue(l, CaseResult.class) : null;
                         } catch (IOException e) {
+                            dropped[0]++;
                             return null;
                         }
                     })
                     .filter(r -> r != null)
                     .collect(Collectors.toList());
+            if (dropped[0] > 0) {
+                log.warn("run {} 的 JSONL 有 {} 行无法解析，已跳过——指标基于剩余 {} 条计算，"
+                        + "请检查文件是否被截断/手工改坏", runId, dropped[0], cases.size());
+            }
+            return cases;
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    /** 断点续跑优化：单次扫描取回全部已完成 caseId（逐题 hasCase 是 O(n²) 全文件重读） */
+    public Set<String> caseIds(String runId) {
+        if (!exists(runId)) {
+            return Set.of();
+        }
+        try {
+            return readLines(runId).stream()
+                    .filter(l -> !l.isBlank())
+                    .map(l -> {
+                        try {
+                            JsonNode n = mapper.readTree(l);
+                            return "case".equals(n.path("type").asText()) ? n.path("caseId").asText() : null;
+                        } catch (IOException e) {
+                            return null;
+                        }
+                    })
+                    .filter(id -> id != null && !id.isEmpty())
+                    .collect(Collectors.toSet());
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }

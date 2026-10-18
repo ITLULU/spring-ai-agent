@@ -1,8 +1,8 @@
 spring:
   application:
     name: rag-kb
-  profiles:
-    active: local
+  # 默认 profile 即零基建模式（内存向量库 + 内存 ChunkStore + 关闭 rerank），clone 即跑；
+  # 持久化/生产形态显式激活：-Dspring-boot.run.profiles=persistent（见 application-persistent.yml）
   # spring-boot-starter-jdbc 在 classpath 后，默认会自动装配 DataSource 并在无 url 时启动失败；
   # 排除掉，改由 ChunkStoreDataSourceConfig 在 rag.chunk-store.type=postgres 时自建——
   # 保证默认内存模式“零基建 clone 即跑”不被破坏
@@ -57,9 +57,9 @@ server:
 
 rag:
   vectorstore:
-    simple: false                  # false + -Pmilvus → 切到 MilvusVectorStore
+    simple: true                   # 默认内存 SimpleVectorStore（零基建）；false + -Pmilvus 构建 → 切到 MilvusVectorStore
   chunk-store:
-    type: ${CHUNK_STORE_TYPE:postgres}   # memory（默认，重启即空）| postgres（落库持久，重启后 warmup 自动重建 BM25）
+    type: ${CHUNK_STORE_TYPE:memory}   # memory（默认，重启即空）| postgres（落库持久，重启后 warmup 自动重建 BM25）
   postgres:                       # 仅 type=postgres 时生效；生产用环境变量覆盖，勿写死密码
     url: ${PG_URL:jdbc:postgresql://localhost:5432/ragkb}
     username: ${PG_USER:postgres}
@@ -76,8 +76,8 @@ rag:
     hybrid: true                  # false → 纯向量（对照组）
     min-vector-similarity: 0.30   # 拒答阈值：漏答 vs 幻觉的权衡点，用评测集调
   rerank:
-    enabled: true                # true → 启用 TEI/托管 rerank API -- GPU 版端口
-    base-url: ${RERANK_URL:http://localhost:8087/rerank}
+    enabled: ${RERANK_ENABLED:false}   # 默认关闭：未部署 TEI 时主链路不受牵连；true → 启用 TEI/托管 rerank API（persistent profile / 环境变量显式打开）
+    base-url: ${RERANK_URL:http://localhost:8087/rerank}   # 本地 TEI GPU 版默认映射端口；CPU 版/托管 API 用 RERANK_URL 覆盖
   eval:
     dataset: data/eval/qa_v2/qa_v2.json   # 带 caseId/锚文本/heldOut 的 v2 测试集
     docs-dir: data/docs                   # 锚点校验时回读源文档用

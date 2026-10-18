@@ -84,12 +84,21 @@ public class RagKbTools {
 
     @Tool(name = "kb_ingest", description = """
             把指定路径的文档（单个文件或目录）解析、切块并写入向量库+BM25 索引。
-            返回写入的 chunk 数与当前切块策略。知识库为空或换了切块策略后需要调用本工具重建。
+            返回写入的 chunk 数、成功/失败文件数与逐文件错误清单（部分失败不连坐）。
+            知识库为空或换了切块策略后需要调用本工具重建。
             """)
     public Map<String, Object> kbIngest(
             @ToolParam(description = "文档或目录路径，例如 data/docs") String path) throws IOException {
-        int n = ingestService.ingest(path);
-        return Map.of("chunks", n, "strategy", ingestService.currentStrategy());
+        IngestService.IngestResult r = ingestService.ingest(path);
+        var m = new LinkedHashMap<String, Object>();
+        m.put("chunks", r.chunks());
+        m.put("filesOk", r.filesOk());
+        m.put("filesFailed", r.filesFailed());
+        if (!r.errors().isEmpty()) {
+            m.put("errors", r.errors());
+        }
+        m.put("strategy", ingestService.currentStrategy());
+        return m;
     }
 
     // ===== 评测机能力 =====

@@ -1,0 +1,164 @@
+# rag-kb 最小基建栈（Milvus + Postgres + TEI Rerank）。
+# 默认内存模式不需要本文件——仅在切换持久化形态时启动：
+#   docker compose up -d                # Milvus + Postgres（常驻）
+#   docker compose --profile rerank up -d   # 追加 CPU 版 rerank（无 GPU 环境够用）
+# 启动应用：mvn spring-boot:run -Dspring-boot.run.profiles=persistent（切 Milvus 需 -Pmilvus 构建）
+# 注：已有统一托管基建（自建 milvus/postgres/rerank 容器）的机器可不启本文件，
+#     用环境变量（MILVUS_HOST/PG_URL/RERANK_URL）指向你的服务即可。
+name: rag-kb-infra
+
+services:
+  # Milvus 依赖的元数据存储 etcd
+  milvus-etcd:
+    image: quay.io/coreos/etcd:v3.5.14
+    container_name: milvus-etcd
+    restart: unless-stopped
+    environment:
+      ETCD_AUTO_COMPACTION_MODE: revision
+      ETCD_AUTO_COMPACTION_RETENTION: "1000"
+      ETCD_QUOTA_BACKEND_BYTES: "4294967296"
+      ETCD_SNAPSHOT_COUNT: "50000"
+      TZ: Asia/Shanghai
+    volumes:
+      - ./data/etcd:/etcd
+    command: etcd -advertise-client-urls=http://milvus-etcd:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    networks:
+      - my-custom-network
+    healthcheck:
+      test: [ "CMD", "etcdctl", "endpoint", "health" ]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # Milvus 单机版（standalone），生产建议升级为 cluster 分布式部署
+  # 对象存储复用共享的 MinIO（见 docker-compose/minio，容器名 minio，同处 my-custom-network）；需先启动 minio
+  milvus-standalone:
+    image: milvusdb/milvus:v2.4.9
+    container_name: milvus-standalone
+    restart: unless-stopped
+    command: [ "milvus", "run", "standalone" ]
+    environment:
+      ETCD_ENDPOINTS: milvus-etcd:2379
+      # 指向共享 MinIO；密钥沿用默认 minioadmin，显式指定桶名 milvus-bucket（由 minio-init 预创建）
+      MINIO_ADDRESS: minio:9000
+      MINIO_BUCKETNAME: milvus-bucket
+      MINIO_USESSL: "false"
+      TZ: Asia/Shanghai
+    volumes:
+      - ./data/milvus:/var/lib/milvus
+      - ./logs/milvus:/milvus/logs
+    ports:
+      - "19530:19530"   # gRPC SDK/API 端口（Spring AI vector-store-milvus 走此口）
+      - "9091:9091"     # metrics / 健康检查端口
+    depends_on:
+      - milvus-etcd
+      - minio
+
+    networks:
+      - my-custom-network
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:9091/healthz" ]
+      interval: 30s
+      timeout: 20s
+      retries: 5
+      start_period: 90s
+
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    restart: unless-stopped
+    ports:
+      - "9000:9000"   # API / S3 兼容端点（对应 application.yaml askbase.storage.minio.endpoint）
+      - "9001:9001"   # Web 控制台
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+      TZ: Asia/Shanghai
+    command: server /data --console-address ":9001"
+    volumes:
+      - ./data:/data
+      - ./logs:/var/log/minio
+    networks:
+      - my-custom-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # 一次性初始化：创建 askbase bucket（对应 application.yaml askbase.storage.minio.bucket）
+  minio-init:
+    image: minio/mc:latest
+    container_name: minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set myminio http://minio:9000 minioadmin minioadmin &&
+      mc mb --ignore-existing myminio/askbase &&
+      mc mb --ignore-existing myminio/milvus-bucket &&
+      echo 'bucket askbase & milvus-bucket ready'"
+    networks:
+      - my-custom-network
+
+  postgres:
+    # 使用带 pgvector 扩展的镜像：既能做 RAG ChatMemory 存储，也能做向量库(PgVectorStore)
+    image: pgvector/pgvector:pg16
+    container_name: postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: rag
+      # 初始化时执行的 SQL 目录（见 conf/init-db.sql，创建 vector 扩展）
+      PGDATA: /var/lib/postgresql/data/pgdata
+      TZ: Asia/Shanghai
+    volumes:
+      - ./data:/var/lib/postgresql/data
+      - ./conf/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    networks:
+      - my-custom-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d rag"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # CPU 版 TEI rerank（bge-reranker-v2-m3，首次拉模型约 2GB，健康检查宽限 120s 属正常）。
+  # 端口 8087 对齐 application.yml RERANK_URL 默认值，启用 rag.rerank.enabled=true 即通。
+  rerank:
+    # TEI GPU 版：cross-encoder 精排服务，走 PyTorch(CUDA) 后端，直接加载 model.safetensors（无需 ONNX）
+    # :1.9 为通用 CUDA12 构建（支持 T4/A10/A100/L4/L40/4090 等）；较老的卡可用架构专用标签，如 :turing-1.9(V100/T4)
+    image: ghcr.io/huggingface/text-embeddings-inference:1.9
+    container_name: rerank-gpu
+    restart: unless-stopped
+    command: [ "--model-id", "BAAI/bge-reranker-v2-m3", "--auto-truncate", "--dtype", "float16" ]
+    ports:
+      - "8087:80"   # GPU 版映射到 8087，可与 CPU 版(8086)共存；精排接口 http://localhost:8087/rerank
+    environment:
+      TZ: Asia/Shanghai
+    volumes:
+      # 可与 CPU 版共用同一份模型缓存：改成 - ../rerank/data:/data 复用已下载的 safetensors
+      - ./data:/data
+    networks:
+      - my-custom-network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all            # 需要限定单卡可改为 count: 1 或 device_ids: ['0']
+              capabilities: [ gpu ]
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -sf http://localhost:80/health || exit 1" ]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 90s
+networks:
+  my-custom-network:
+    external: true
+    name: my-custom-network
