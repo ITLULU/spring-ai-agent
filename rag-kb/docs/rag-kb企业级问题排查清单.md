@@ -95,7 +95,7 @@
 
 #### 🟠 SEC-01 · /api/ingest 与 kb_ingest = 任意文件读取通道
 - **位置**：`KbController.ingest()`、`RagKbTools.kbIngest()` 接受任意路径直传 `Files.readString`/PDFBox
-- **风险**：把服务器任意文本文件（配置、源码、凭据文件改后缀 .txt）灌进知识库并经 `/api/query` 回显——真实的数据泄露路径；MCP 化后该能力进一步暴露给任何连 `/sse` 的 Agent
+- **风险**：把服务器任意文本文件（配置、源码、凭据文件改后缀 .txt）灌进知识库并经 `/api/query` 回显——真实的数据泄露路径；MCP 化后该能力进一步暴露给任何连 `/mcp` 端点的 Agent
 - **目标**：入库路径白名单 base-dir（canonicalPath 前缀校验）+ 后缀白名单集中定义；这也是评测锚点回读 `docsDir` 的同一套约束
 - [ ] 待处理
 
@@ -193,11 +193,11 @@
 
 ### B9. MCP 协议层（PRO）
 
-#### 🟠 PRO-01 · SSE 传输已被 MCP 规范废弃
-- **位置**：`application.yml:24` `protocol: SSE`
-- **现状**：MCP 2025-03 规范起 Streamable HTTP 取代 HTTP+SSE；`docs/MCP协议层面试考点.md` 自己整理的考点，配置却停在旧协议——面试官按你自己的文档追问会尴尬
-- **目标**：切 `protocol: STREAMABLE`（Spring AI 1.1 starter 支持），保留一份 SSE 说明作对比叙事；mcp-probe.ps1 同步改握手流程
-- [ ] 待处理
+#### ✅ PRO-01 · SSE 传输已被 MCP 规范废弃（2026-10 已切 Streamable HTTP）
+- **位置**：`application.yml` `protocol: STREAMABLE` + `streamable-http.mcp-endpoint: /mcp`
+- **修复实现**：① 配置键不靠记忆——从 starter 1.1.3 的 `spring-configuration-metadata.json` 核实枚举 `SSE | STREAMABLE | STATELESS` 与 `streamable-http.*` 键块；② 实测切换成本：仅 yml 三行 + `mcp-probe.ps1` 握手流程（旧双通道 SSE 收流 → 单端点 POST /mcp + `Mcp-Session-Id` 头），`RagKbTools`/`McpServerConfig` 零改动——"接口不变、实现替换"再次兑现；③ 副产品：新探针逐请求 POST，PowerShell 5.1 即可跑（旧版需 pwsh 7）；④ E2E 实测：initialize 拿到会话头 → tools/list 10 工具 → tools/call `eval_dataset_validate` 真执行（36 题 stale=0）
+- **SSE 对比叙事保留在**：README"MCP 专题"§6（双通道→单端点演进、STATELESS 为下一可选形态）
+- [x] 已修复（实测验证）
 
 #### 🟡 PRO-02 · 只做了 Server，没有 Client 消费侧
 - **现状**：rag-kb 是工具提供方；"阶段2 工单 Agent 通过 MCP Client 连 rag-kb"未起步（README:111 已自标 TODO）
