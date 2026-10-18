@@ -18,7 +18,13 @@ import com.fasterxml.jackson.databind.JsonNode;
 /**
  * TEI（Text Embeddings Inference）/rerank 协议客户端，也兼容主流托管 rerank API：
  * POST {base-url}  body: {"query": "...", "texts": ["..."]}
- * resp: {"results": [{"index": 0, "relevance_score": 0.98}, ...]}
+ * <p>响应存在两种真实形态（2026-10-18 台式机 V4 验证实抓：本地 TEI 1.9 与托管 API 契约不同，
+ * 旧实现只认后者，导致 GPU 精排从未生效、全部静默降级）：
+ * <ul>
+ *   <li>TEI 原生：{@code [{"index":0,"score":0.104}, ...]} —— 裸数组，字段名 score；</li>
+ *   <li>托管 API（Cohere/Jina/DashScope 类）：{@code {"results": [{"index":0,"relevance_score":0.98}]}}。</li>
+ * </ul>
+ * 解析层两种都吃：顶层先看 isArray，否则取 results；分数先取 relevance_score，缺失再取 score。
  */
 @Component
 @ConditionalOnProperty(name = "rag.rerank.enabled", havingValue = "true")
@@ -48,7 +54,7 @@ public class TeiReranker implements Reranker {
      *   <li>响应用 index 回映射候选位置：rerank 服务可能任意乱序返回，
      *       分数必须贴回正确的 chunk；贴分后用 withRerank 生成新 record（不可变对象模式），
      *       原 candidates 不受污染；</li>
-     *   <li>失败降级而非报错：响应缺失/无 results/<b>连接拒绝/超时/协议异常</b>时退回按融合名次截断，
+     *   <li>失败降级而非报错：响应缺失/形态不认/<b>连接拒绝/超时/协议异常</b>时退回按融合名次截断，
      *       并 WARN 留痕（降级可见才能被监控发现）——
      *       精排是锦上添花，不该因外部服务抖动把整个 /api/query 打成 500。</li>
      * </ul>
@@ -72,25 +78,39 @@ public class TeiReranker implements Reranker {
             return candidates.subList(0, Math.min(topN, candidates.size()));
         }
 
-        List<RetrievedChunk> reranked = new ArrayList<>();
-        if (resp == null || !resp.has("results")) {
-            // 降级：当作 Noop 直通，保留融合名次
-            log.warn("rerank 响应无 results 字段，降级为融合名次截断: {}", baseUrl);
+        List<RetrievedChunk> reranked = parseAndApply(resp, candidates, topN);
+        if (reranked.isEmpty()) {
+            // 覆盖两类无效：结构不认识（无裸数组也无 results）、或全部野 index 被丢
+            log.warn("rerank 响应无可用结果（期望 TEI 裸数组或含 results 字段的对象），降级为融合名次截断: {}", baseUrl);
             return candidates.subList(0, Math.min(topN, candidates.size()));
         }
-        for (JsonNode r : resp.get("results")) {
+        return reranked;
+    }
+
+    /**
+     * 解析两种响应形态并按 index 回映射打分（包可见静态方法：纯函数，单测直接验契约）。
+     * 返回已按 rerankScore 降序截断的列表；响应形态不认或无有效条目时返回空表由调用方降级。
+     */
+    static List<RetrievedChunk> parseAndApply(JsonNode resp, List<RetrievedChunk> candidates, int topN) {
+        if (resp == null) {
+            return List.of();
+        }
+        JsonNode results = resp.isArray() ? resp : resp.path("results");
+        if (!results.isArray()) {
+            return List.of();
+        }
+        List<RetrievedChunk> reranked = new ArrayList<>();
+        for (JsonNode r : results) {
             int idx = r.path("index").asInt(-1);
-            double score = r.path("relevance_score").asDouble(0.0);
+            // 字段名双兼容：TEI 用 score，托管 API 用 relevance_score
+            double score = r.has("relevance_score") ? r.path("relevance_score").asDouble(0.0)
+                                                    : r.path("score").asDouble(0.0);
             // 外部响应不可盲信：野 index 越界会抛 IndexOutOfBounds 打挂整次查询
             if (idx < 0 || idx >= candidates.size()) {
                 log.warn("rerank 返回非法 index={}（候选数 {}），跳过该条", idx, candidates.size());
                 continue;
             }
             reranked.add(candidates.get(idx).withRerank(score));
-        }
-        if (reranked.isEmpty()) {
-            log.warn("rerank 返回全部无效，降级为融合名次截断: {}", baseUrl);
-            return candidates.subList(0, Math.min(topN, candidates.size()));
         }
         reranked.sort(Comparator.comparingDouble(RetrievedChunk::rerankScore).reversed());
         return reranked.subList(0, Math.min(topN, reranked.size()));

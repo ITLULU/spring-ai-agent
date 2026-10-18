@@ -116,21 +116,31 @@ Markdown 报告由 `GET /api/eval/runs/{runId}/report` 从 JSONL 渲染——这
 ## 评测结果（优化前 → 优化后）
 
 > 规则：每个数字必须能追溯到具体 runId；跨 datasetVersion 禁止对比（diff 接口会拒绝）。
-> ⬜ **待 baseline 跑完后回填本表**（README 的承诺在这一节兑现）。
+> ✅ 2026-10-18 台式机（RTX 3060，persistent 全形态：Milvus+PG+GPU rerank，Judge=qwen-max 独立）实跑回填，
+> 六 run 矩阵全部 datasetVersion=ea4acd8b 可互比：
 
-| 实验（单变量） | 主集准确率 | held-out 准确率 | 拒答准确率 | 错因 Top1 | datasetVersion | runId |
-|---|---|---|---|---|---|---|
-| baseline：recursive + hybrid | – | – | – | – | – | *待填* |
-| fixed 切块对照 | – | – | – | – | – | *待填* |
-| parent-child 切块 | – | – | – | – | – | *待填* |
-| 纯向量（hybrid=false） | – | – | – | – | – | *待填* |
-| + rerank | – | – | – | – | – | *待填* |
-| 拒答阈值 0.30 → 0.45 | – | – | – | – | – | *待填* |
+| 实验（单变量） | 主集准确率 | held-out 准确率 | 拒答准确率 | 错因 Top1 | runId |
+|---|---|---|---|---|---|
+| baseline：fixed + hybrid + GPU rerank | 94.4% | 100% | 100%（双集） | GENERATION×1 | `20261018-195833-baseline-87f7` |
+| recursive 切块对照 | **100%** | 100% | 100% | 无 | `20261018-201900-recursive-f4ef` |
+| parent-child 切块对照 | **100%** | 100% | 100% | 无 | `20261018-202556-parent-child-92d0` |
+| 纯向量（hybrid=false） | 94.4% | 100% | 100% | GENERATION×1 | `20261018-203206-vector-only-5e28` |
+| no-rerank 对照（vs baseline） | 94.4% | 100% | 100% | GENERATION×1 | `20261018-203834-no-rerank-9685` |
+| 拒答阈值 0.30 → 0.45 | 88.9% | 100% | 100% | GENERATION×2 | `20261018-204447-threshold-045-fb0e` |
+
+实验读法（面试叙事点）：
+- **失败全部落在 GENERATION 层，RETRIEVAL_MISS 为零**——这套语料上检索层已命中，
+  剩余问题在生成/裁判噪声，该动 prompt 而不是动检索（FailureAnalyzer 归因直接给出这个结论）；
+- 小语料（36 题/5~6 块）下单题差异在噪声区（分辨率≈5.6pp/题）：baseline→recursive 的
+  diff 是 fixed=1（exp-006 FAIL→PASS）、newlyFailed=0——结论只敢下到"无回归"，不敢下到"更优"；
+- 阈值提到 0.45 反而多误杀 2 题且拒答零收益 → **0.30 保持不动**（数据支持的决策，不是感觉）；
+- 拒答准确率全矩阵 100%（含 10 道对抗题）：幻觉治理这道闸门在小语料上已经顶格；
+- 切块策略换对照组时语料需重灌（deterministic id + 幂等入库自动替换旧块，PG/Milvus/BM25 三路恒一致）。
 
 ## 验证与测试
 
 ```powershell
-mvn -pl rag-kb test          # 33 个单元/契约测试（切块含确定性id/BM25+RRF/入库幂等与目录批量/评测存档/失败归因/MCP 工具契约）
+mvn -pl rag-kb test          # 40 个单元/契约测试（切块含确定性id/BM25+RRF/入库幂等与目录批量/评测存档/失败归因/MCP 工具契约/TEI-rerank 双形态响应）
 powershell -ExecutionPolicy Bypass -File scripts/mcp-probe.ps1   # MCP 最小客户端演练（Streamable）：initialize→tools/list→tools/call
 ```
 

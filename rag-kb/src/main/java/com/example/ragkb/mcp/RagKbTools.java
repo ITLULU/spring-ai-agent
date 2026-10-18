@@ -21,7 +21,7 @@ import com.example.ragkb.retrieval.RetrievedChunk;
 
 /**
  * MCP tools 层——"接口不变、实现替换"架构纪律的又一次兑现：
- * 这一层不写任何新业务逻辑，只把 KbController/EvalController 背后已有的 Service 方法
+ * 这一层不写任何新业务逻辑，只把 KbController/EvalController 背后已有的 Service 方法s
  * 用 @Tool 注解重新包装成 MCP 协议下的标准工具。REST 与 MCP 是同一能力的两种传输形态。
  *
  * description 是给 LLM 看的"工具选择说明书"——写清何时用/何时不用、返回什么，
