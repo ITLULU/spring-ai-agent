@@ -135,34 +135,155 @@ pwsh scripts/mcp-probe.ps1   # MCP 最小客户端演练：SSE 握手→initiali
 `RagKbToolsTest.toolCallbacksExposeExactContract` 守护对外 10 个工具的 name/description/参数 schema——
 改工具契约必先过这条测试（REST 与 MCP 双传输共享同一 Service 层的"契约锚"）。
 
-## MCP Server：把 RAG + 评测机封装成标准工具（Agent 生态接入点）
+## MCP 专题：零协议代码把知识库+评测机封装成标准工具（Agent 生态接入点）
 
-同一个 Service 层现在有两种传输形态：REST（人/脚本调）+ **MCP**（LLM/Agent 自动发现调用）。
-启动后任意 MCP 客户端（Claude Desktop / Cursor / Qoder）连 SSE 端点即可：
+> 代码：`mcp/RagKbTools.java`（工具定义）+ `mcp/McpServerConfig.java`（装配）+ `application.yml` 的 `spring.ai.mcp.server` 块。
+
+同一个 Service 层现在有两种传输形态：REST（人/脚本调）+ **MCP**（LLM/Agent 自动发现调用），
+两者共享同一套 Service，互不重复。启动后任意 MCP 客户端（Claude Desktop / Cursor / Qoder）连 SSE 端点即可：
 
 ```json
 { "mcpServers": { "rag-kb": { "url": "http://localhost:8000/sse" } } }
 ```
 
-对外的 10 个工具（契约由 `RagKbToolsTest.toolCallbacksExposeExactContract` 守护）：
+### 1. 封装全景：一次 MCP 调用穿过哪几层
+
+```
+MCP 客户端(Claude/Cursor/Qoder)
+   │ SSE 连 /sse，JSON-RPC 消息 POST 到 /mcp/message?sessionId=xxx，响应从 SSE 流推回
+   ▼
+┌─────────────────────────────────────────────────────┐
+│ ① pom 依赖 spring-ai-starter-mcp-server-webmvc      │ ← 传输层全由它装配（SSE/JSON-RPC/会话）
+├─────────────────────────────────────────────────────┤
+│ ② McpServerConfig：ToolCallbackProvider Bean          │ ← 唯一胶水，一行 builder，声明"对外暴露什么"
+├─────────────────────────────────────────────────────┤
+│ ③ RagKbTools：@Tool + @ToolParam 注解方法              │ ← 工具说明书写给 LLM 看；只包装，不写业务
+├─────────────────────────────────────────────────────┤
+│ ④ Service 层（QaService/IngestService/EvalService…）  │ ← 真正的业务，REST 与 MCP 共享
+└─────────────────────────────────────────────────────┘
+```
+
+### 2. 四个零件逐个拆
+
+**零件① 依赖：starter 一把包办协议层**（pom.xml）
+
+```xml
+<dependency>
+    <groupId>org.springframework.ai</groupId>
+    <artifactId>spring-ai-starter-mcp-server-webmvc</artifactId>
+</dependency>
+```
+
+自动配置的触发条件就是"容器里出现 `ToolCallbackProvider` Bean"。SSE 端点、`/mcp/message` 回调、
+`initialize / tools/list / tools/call` 的 JSON-RPC 分发、会话管理——手写代码量为**零**。
+
+**零件② 装配：一个 Bean 声明能力清单**（`McpServerConfig`，整个类就这一个方法）
+
+```java
+@Bean
+public ToolCallbackProvider ragKbToolCallbackProvider(RagKbTools ragKbTools) {
+    return MethodToolCallbackProvider.builder().toolObjects(ragKbTools).build();
+}
+```
+
+`MethodToolCallbackProvider` 反射扫描 `ragKbTools` 上所有 `@Tool` 方法，每个转成一个
+`ToolCallback`（name + description + JSON Schema 参数描述）。**MCP 对外暴露什么完全由这个 Bean 决定。**
+
+⚠️ 这个 Bean 还藏了一个非平凡的坑——**循环依赖**：
+
+```
+openAiChatModel → toolCallingManager → toolCallbackResolver → 本Bean → RagKbTools
+     ↑                                                              |
+     └────────────────── QaService / EvalJudge ←───────────────────┘   成环！
+```
+
+starter 会把所有 `ToolCallbackProvider` 喂给 ChatModel 的工具解析链（为了支持"模型自己调工具"），
+而我们的工具又反过来需要 ChatModel 做生成。解法：在 `QaService`/`EvalJudge` 的 ChatModel 注入点加
+`@Lazy`——构造时只存代理不调方法，首次 `call` 才解析真实 Bean，环在消费点断开而不是在源头阉割功能。
+
+**零件③ 工具定义：注解三要素 + 一条包装层纪律**（`RagKbTools`）
+
+```java
+@Tool(name = "kb_query", description = """
+        对企业规章制度知识库提问，返回带编号引用（citations）的答案。
+        内部执行完整 RAG 链路：混合检索→重排→LLM 生成。超出文档范围的问题会拒答（refused=true）。
+        回答政策类问题优先用本工具而不是 kb_retrieve（后者只召回、不调 LLM）。
+        """)
+public Map<String, Object> kbQuery(
+        @ToolParam(description = "自然语言问题，例如：员工入职满 3 年有多少天年假？") String question) {
+    QueryResponse r = qaService.answer(question);   // ← 直接复用 Service，包装层零业务逻辑
+    ...
+}
+```
+
+| 要素 | 作用 | 本项目的讲究 |
+|---|---|---|
+| `name` | LLM 选工具的标识 | `kb_*` / `eval_*` 前缀分域，客户端可按前缀理解能力边界 |
+| `description` | **给 LLM 看的选工具说明书**（真正需要打磨的文案） | 写清何时用/何时不用（kb_query vs kb_retrieve 的分工）、返回什么、甚至行为约束（`judge_error_record` 明确写"Agent 不应自行调用"） |
+| `@ToolParam` | 生成 inputSchema（JSON Schema） | 可选参数 `required = false`（如 kb_retrieve 的 evidence） |
+
+包装层纪律：**禁止写业务逻辑**，只做"接口不变、实现替换"的重新表达——这是同一能力能同时以
+REST/MCP 两种形态服务、且测试/评测不用维护两套的前提。
+
+**零件④ 配置声明**（application.yml）
+
+```yaml
+spring.ai.mcp.server:
+  enabled: true
+  name: rag-kb-mcp-server
+  protocol: SSE          # ⚠️ 规范已废弃 SSE 传输，演进方向 Streamable HTTP（清单 PRO-01）
+  sse-endpoint: /sse
+  sse-message-endpoint: /mcp/message
+  instructions: >-       # 服务端"使用指南"，随 initialize 结果返回给客户端
+    rag-kb 企业知识库 MCP Server：用 kb_query 提问制度文档（带引用溯源）...
+```
+
+### 3. 对外的 10 个工具（契约由 `RagKbToolsTest.toolCallbacksExposeExactContract` 守护）
 
 | 工具 | 作用 | 背后复用 |
 |---|---|---|
 | `kb_query` | 带引用溯源的政策问答（完整 RAG 链路） | `QaService` |
 | `kb_retrieve` | 纯检索归因，可传 evidence 看逐块命中标记 | `HybridRetrievalService` |
-| `kb_ingest` | 文档解析入库（向量+BM25 三路写） | `IngestService` |
+| `kb_ingest` | 文档/目录批量入库（向量+BM25+ChunkStore 三路写，幂等） | `IngestService` |
 | `eval_dataset_validate` | 跑批前锚点守门校验 | `DatasetService` |
 | `eval_run_start` | 异步启动评测跑批（错题本/smoke/断点续跑） | `EvalService` |
 | `eval_run_status` / `eval_run_report` / `eval_list_runs` | 进度、Markdown 报告、历史 run | `EvalService` |
 | `eval_run_diff` | 单变量实验裁决器（跨 datasetVersion 拒绝） | `EvalService` |
 | `judge_error_record` | **人在回路**：人工推翻 Judge 误判后记入清单 | `EvalJudgeErrorLog` |
 
-三个可面试的设计点：
-1. **零协议代码**——`@Tool` 注解 + 一个 `ToolCallbackProvider` Bean，SSE/JSON-RPC 全部由 starter 装配；工具的 `description` 是给 LLM 看的选工具说明书，这才是真正需要打磨的文案
-2. **循环依赖断开**——`openAiChatModel → toolCallbackResolver → ToolCallbackProvider → RagKbTools → QaService → openAiChatModel` 成环，在 `QaService`/`EvalJudge` 的 ChatModel 注入点加 `@Lazy` 解决（构造只存代理，首次 call 才解析）
-3. **HITL 的工具层表达**——`judge_error_record` 的 description 明确禁止 Agent 自行判定 Judge 出错并调用：可靠性复利断点上留人工闸门
+契约测试锁的是：名字集合 + description 非空 + inputSchema 含 properties——改任何对外工具签名，
+测试先红给你看，这就是"接口不变"的工程执行而非口头约定。
 
-验证：`pwsh scripts/mcp-probe.ps1`（模拟最小客户端：SSE 握手→initialize→tools/list→tools/call 真执行一次守门校验）。
+### 4. 新增一个工具 = 三步（动手清单）
+
+1. `RagKbTools` 加一个 `@Tool` 方法，内部只调已有 Service；
+2. `RagKbToolsTest` 的 `EXPECTED_TOOLS` 名字集合加上新工具（不加会红——测试锁集合相等而非包含）；
+3. 客户端重连 `/sse` 自动发现，REST 端点如需同步暴露再另加 Controller。
+
+### 5. 验证：两种手段 + 一条启动 WARN 的真相
+
+```powershell
+pwsh scripts/mcp-probe.ps1    # 需 PowerShell 7：模拟最小客户端 SSE握手→initialize→tools/list→tools/call 真执行一次守门校验
+```
+
+或用 curl 手动握手（理解协议的最好方式）：
+1. `GET /sse` 保持连接 → 收到 `event:endpoint` + `data:/mcp/message?sessionId=xxx`；
+2. `POST /mcp/message?sessionId=xxx` 发 `initialize`（HTTP 202，JSON-RPC 响应从 SSE 流推回）→ 再发 `notifications/initialized` → `tools/list`；
+3. 读 SSE 流里的响应，能看到全部 10 个工具的 name/description/inputSchema。
+
+启动日志的 `WARN SyncMcpToolProvider: No tool methods found in the provided tool objects: []` 是**无害噪音**：
+starter 内部另有一条"直接工具对象"注册路径，本项目工具走的是 `ToolCallbackProvider` Bean（零件②），
+那条路径永远扫不到东西——实际能力以 `tools/list` 返回为准（FAQ 表也有这条）。
+
+### 6. 面试可讲点速查
+
+- MCP 解决的痛点：M 个工具×N 个模型的 M×N 定制集成 → 标准化为 M+N（工具只需实现一次 MCP Server，任意客户端可接）；
+- 与 Function Calling 的关系：不是竞品是分层——FC 是模型厂商的"选工具"能力（私有格式），MCP 是工具供给的开放协议；Agent 客户端把 tools/list 翻译进模型的 FC 菜单，选工具仍是模型的事；
+- 一次 tools/call 的完整往返：SSE 长连接下行推响应，消息走 POST 上行（双通道），sessionId 维系会话——为什么不用纯轮询/纯 WebSocket：JSON-RPC 语义 + 防火墙友好；
+- description 是 prompt engineering 的一部分：工具选择准确率取决于文案的"何时用/何时不用"边界表达，不是功能罗列；
+- 循环依赖的 @Lazy 断环：不阉割"模型自己调工具"能力，只在消费点延迟解析；
+- HITL 的工具层表达：`judge_error_record` 的 description 禁止 Agent 自行调用，人在回路闸门写进协议元数据；
+- 演进：SSE 传输已被规范废弃（PRO-01），迁 Streamable HTTP 后本项目只改 starter 依赖与 yml，工具代码零改动——接口不变、实现替换的又一次兑现。
 
 ## 架构与核心决策（面试对着这节讲）
 
@@ -450,6 +571,7 @@ rag-kb/
 | 评测分数比上一轮莫名下降 | 先查 warmup 日志 BM25 是否空（内存模式重启未重灌）；语料翻倍已不可能（ING-02 幂等已修），再看三路分数归因 |
 | 切 Milvus 后启动失败 | Maven profile 没生效（IDEA 未勾选/未 Reload）或维度未对齐（见"切到 Milvus"第 1 条） |
 | postgres 模式启动报连不上库 | Postgres 实例/库不存在（表会自建、库不会）；检查 PG_URL 与容器状态 |
+| 启动日志 WARN `SyncMcpToolProvider: No tool methods found in the provided tool objects: []` | 无害噪音：starter 内部还有一条"直接工具对象"注册路径，本项目工具走的是 `ToolCallbackProvider` Bean（McpServerConfig），那条路径扫到空才打 WARN；实测 `tools/list` 返回全部 10 个工具（可用 scripts/mcp-probe.ps1 验证，需 PowerShell 7 的 `pwsh`） |
 | 评测中途要改配置重跑 | run 由守护线程执行、无优雅停机——kill 后用 `{"resumeRunId":"…"}` 断点续跑 |
 
 ## TODO（学习路线附带任务，编号关联 docs/rag-kb企业级问题排查清单.md）
@@ -461,4 +583,4 @@ rag-kb/
 - [ ] 评测集扩到 100 条（反向出题法，见 `QaCase` 注释；现 36 题：主集 26 + held-out 10，含 10 道对抗题）
 - [ ] RAGAS 指标对照：用 Python RAGAS 跑同一测试集，校准自建 Judge
 - [ ] MCP 传输切 Streamable HTTP（SSE 已被规范废弃，PRO-01）；ChatClient/ChatMemory 化（AGT-01/02）
-- [x] 把本系统封装成工具接入 Agent 生态（MCP Server 已完成，见上节；接阶段2工单处理 Agent 待做）
+- [x] 把本系统封装成工具接入 Agent 生态（MCP Server 已完成，见"MCP 专题"节；接阶段2工单处理 Agent 待做）
