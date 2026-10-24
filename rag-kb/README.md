@@ -507,6 +507,28 @@ docker compose --profile rerank up -d     # 追加 CPU 版 rerank（8087）
 | Milvus standalone（v2.4.9，连带 etcd/minio） | 19530 / 9091 | 向量持久化：`-Pmilvus` 构建 + persistent profile（`simple=false`） |
 | Postgres（pgvector/pg16） | 5432 | ChunkStore 落库；连接串指向 **ragkb 库**（表由应用启动自建），凭据 postgres/postgres 与 yml 默认值一致 |
 | Rerank TEI CPU 版（BAAI/bge-reranker-v2-m3） | **8087**（对齐 yml 默认） | `rag.rerank.enabled=true`（persistent profile 已开）；服务未起时自动降级，不阻断主链路 |
+| Rerank **Apple GPU（Metal）** 版：llama.cpp `llama-server --reranking -ngl 99` | 8089（宿主机进程，**不是容器**） | 见下条，macOS 唯一能用上本机 GPU 的路 |
+
+> **macOS 上没有"GPU 版 rerank 容器"这条路**：Docker Desktop 在 Mac 上做不了 GPU 直通（`docker info` 里只有
+> `runc`，没有 `nvidia` runtime），NVIDIA 也早已不支持 CUDA on macOS，而 Apple 的 GPU 是 **Metal** ——
+> 所以要换的是**推理引擎**而不是容器。落地方式在 `SpringCloudAdmin/rerank-apple-gpu/`
+> （`install.sh` 拉 llama.cpp b11836 macOS-arm64 预编译包 + `bge-reranker-v2-m3` GGUF 并校 SHA256，
+> `start.sh` 起在 127.0.0.1:8089）。**Java 代码零改动**：llama.cpp 的 `/rerank` 请求/响应与 TEI 同契约
+> （`{"query","texts"}` → 裸数组 `[{"index","score"}]`），只需 `export RERANK_URL=http://127.0.0.1:8089/rerank`。
+> M1 Pro 实测 20 候选 296ms，同二进制 `-ngl 0`（CPU）785ms，TEI CPU 容器 4792ms。
+>
+> 两个必须知道的口径与坑：
+> 1. **跨后端只能比名次，不能比分数值**——llama.cpp 回的是未过 sigmoid 的原始 logit（**可以是负数**），
+>    TEI 回 0~1。本项目 `rerankScore` 只用于排序与调试展示、无 0~1 阈值判断，所以负分安全；
+>    但若将来加"分数低于阈值就丢弃"的逻辑，换后端会让它形同全砍。
+> 2. **降级会伪装成"已开启"**——`enabled=true` 而服务端拒答时（如 `--max-client-batch-size` /
+>    `--max-concurrent-requests` 小于 `top-n` 融合后的候选数，本服务一次最多发 40 条），
+>    HTTP 层看不出异常，只有一行 WARN。**判据是返回结果的 `rerankScore` 是否非 null**，
+>    不是状态码。验证器 `SpringCloudAdmin/rerank-apple-gpu/RerankLiveCheck.java` 就是拿 `TeiReranker`
+>    本体跑的（20/40 候选整批返回 + 死端口反向验证降级），可复现命令写在那份 README 里。
+> 3. 顺带一条环境坑：`mvn -o` 在这台机器上对 rag-kb 会报 `present, but unavailable`，
+>    那是 Maven 3.10 的 `_remote.repositories` 归属校验、**不是缺依赖**（本地仓由 settings.xml 指到
+>    `/Users/a/m2/repository`，不在 `~/.m2`），联网走阿里镜像即可 `mvn -B test`（40 测试全绿）。
 
 > 已有统一托管基建的机器（按服务拆目录的自建 compose）可不启本文件，用
 > `MILVUS_HOST`/`PG_URL`/`RERANK_URL` 环境变量指向你的服务即可（端口不同也没关系，覆盖默认值）。
