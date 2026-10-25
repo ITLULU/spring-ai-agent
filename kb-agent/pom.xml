@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.example</groupId>
+        <artifactId>spring-ai-agent</artifactId>
+        <version>0.1.0</version>
+    </parent>
+
+    <artifactId>kb-agent</artifactId>
+    <name>kb-agent</name>
+    <description>Stage-2 ticket-handling Agent: consumes rag-kb through MCP (Streamable HTTP),
+        code-node workflow orchestration with confidence gate, exponential-backoff retry and
+        human-in-the-loop review. Ticket state machine persisted in H2.</description>
+
+    <dependencies>
+        <!-- PRO-02 的主角：MCP Client 消费侧。starter 自动装配 McpSyncClient 并把
+             rag-kb /mcp 的 tools/list 翻译成 Spring AI ToolCallback —— 阶段1 的 RAG
+             因此成为本 Agent 的一个可调用工具，而不是被 HTTP 硬编码粘进来。 -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-mcp-client</artifactId>
+        </dependency>
+
+        <!-- 工单状态机落 H2（file 模式，本地优先：重启不丢、零外部基建）。
+             生产换 MySQL/PG 只动 datasource url，DAO 写的都是标准 SQL。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-jdbc</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>

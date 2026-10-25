@@ -4,6 +4,8 @@ import java.util.List;
 import java.util.Map;
 
 import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -41,7 +43,8 @@ public class KbController {
     public record IngestRequest(String path) {
     }
 
-    public record QueryRequest(String question) {
+    /** conversationId 可空：为空即单轮无状态问答（评测链路语义），非空启用多轮记忆 */
+    public record QueryRequest(String question, String conversationId) {
     }
 
     @PostMapping("/ingest")
@@ -99,7 +102,28 @@ public class KbController {
     @PostMapping("/query")
     public QueryResponse query(@RequestBody QueryRequest req) {
         requireQuestion(req);
-        return qaService.answer(req.question());
+        return qaService.answer(req.question(), req.conversationId());
+    }
+
+    /**
+     * 会话回查：返回该 conversationId 的窗口历史（只有 question/answer，
+     * 检索上下文不进窗口——见 QaService 的裁剪决策）。阶段 2"多轮会话可追溯"的验收面。
+     */
+    @GetMapping("/session/{conversationId}")
+    public Map<String, Object> session(@PathVariable String conversationId) {
+        List<Map<String, Object>> turns = qaService.session(conversationId).stream()
+                .map(m -> Map.<String, Object>of(
+                        "role", m.getClass().getSimpleName().replace("Message", ""),
+                        "text", m.getText()))
+                .toList();
+        return Map.of("conversationId", conversationId, "size", turns.size(), "messages", turns);
+    }
+
+    /** 显式清会话：内存模式下除了重启进程，这是唯一的上下文重置入口 */
+    @PostMapping("/session/{conversationId}/reset")
+    public Map<String, Object> resetSession(@PathVariable String conversationId) {
+        qaService.clearSession(conversationId);
+        return Map.of("conversationId", conversationId, "status", "cleared");
     }
 
     /** 入口参数拦截：空问句进检索链路只会浪费 token 并返回噪声结果，400 比 200 诚实 */

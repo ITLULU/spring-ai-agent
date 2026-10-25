@@ -62,3 +62,6 @@ application-local.properties
 hs_err_pid*
 replay_pid*
 .coversure/
+
+# ===== 运行时数据（H2 工单库；rag-kb/data 下的语料与评测集是刻意跟踪的） =====
+kb-agent/data/

@@ -48,7 +48,8 @@
 - **位置**：`qa/QaService.answer(String)` 第 48 行：`retrieve()` 在进入计时方法**之前**执行，`answer(question, chunks)` 里的 `start` 只圈住生成段
 - **现象**：`/api/query` 返回的 `elapsedMs` ≈ 纯生成耗时；评测 run 里 `latencyMs`（`EvalService.runCase` 的 t0 在检索前）= 检索+生成。两套口径，README/面试报数字时必被追问穿帮
 - **修复**：把计时起点移到 `answer(String)` 的 retrieve 之前，或统一由 Controller 层计时；QueryResponse javadoc 写明口径
-- [ ] 待处理
+- **修复实现（2026-10-25）**：`QaService.answer(String[,conversationId])` 在 retrieve 处掐表并把 `retrievalMs` 传入生成段；`QueryResponse` 新增 `retrievalMs` 字段，javadoc 写明 `elapsedMs = 检索段 + 生成段`；`EvalService.runCase` 同一口径（自己测 retrieve 段再传进去，不再两套数字）；REST 与 MCP `kb_query` 都透出 `retrievalMs`。单测：`QaServiceAgentTest#onlinePathElapsedTimeIncludesRetrievalSegment` + `retrievalLayerRefusalSkipsModelButIsRememberedAndTimed`（拒答时 `elapsedMs == retrievalMs`）
+- [x] 已修复（单测锁行为；带 key 的线上数字复测待做，历史 README 数字仍是旧口径）
 
 ---
 
@@ -202,7 +203,9 @@
 #### 🟡 PRO-02 · 只做了 Server，没有 Client 消费侧
 - **现状**：rag-kb 是工具提供方；"阶段2 工单 Agent 通过 MCP Client 连 rag-kb"未起步（README:111 已自标 TODO）
 - **目标**：`spring-ai-starter-mcp-client` 写一个最小 Agent（ChatClient + ToolCallback 从 MCP 发现），这条链路通了，rag-kb 才从"问答系统"变成"Agent 生态里的检索工具"——正是阶段 2 第 6-7 周的主线
-- [ ] 待处理
+- **落地（2026-10-25）**：新模块 [`kb-agent`](../../kb-agent/README.md)（端口 8001）用 `spring-ai-starter-mcp-client` 的 `streamable-http.connections.rag-kb` 连本服务 `/mcp`，`KbMcpGateway` 按工具名取 `ToolCallback` 调 `kb_query`/`kb_retrieve`，rag-kb 侧零改动。工单流水线（分诊→检索→答复→装配→置信闸门）+ 状态机 + 退避重试 + 人工审核已带 35 项单测
+- **仍待验**：`GET :8001/api/agent/capabilities` 需看到 `kbAvailable=true` 且 `mcpTools` 非空——要 rag-kb 与 kb-agent 同时带 key 起，本会话无 key 未跑
+- [x] 消费侧代码已完成（单测 + 无 key 实启验证），端到端实连待用户带 key 复验
 
 ---
 
@@ -212,12 +215,15 @@
 - **位置**：`QaService:83`、`EvalJudge:83`
 - **问题**：ChatClient fluent API、Advisor 链（`SimpleLoggerAdvisor`/`MessageChatMemoryAdvisor`/`QuestionAnswerAdvisor`）、`.entity()` 结构化输出一个未用——这是 Spring AI Agent 岗面试的第一批问题，也说明当前代码是"SDK 直调"而非"框架工程"
 - **修复**：QaService 改 `ChatClient.builder(chatModel).defaultAdvisors(...)`；system prompt 外置模板；(answer, refused, citations[]) 用 `.entity(Record)` 一次生成 + 机器校验
-- [ ] 待处理
+- **修复实现（2026-10-25）**：新增 `config/AgentChatConfig`（`@Bean ChatClient kbChatClient(@Lazy ChatModel)`，@Lazy 断 starter 的工具解析环）；`QaService` 改走 `chatClient.prompt().system(s -> s.text(classpath:prompts/qa-system.st).param("context", …)).user(question)`，检索上下文只进 system；记忆用 `MessageChatMemoryAdvisor` **按请求挂**（不是 defaultAdvisors），保证评测链路 `conversationId=null` 时无状态。`EvalJudge` 仍裸调 `ChatModel`——裁判要的是"最小干预的一次打分"，挂 advisor 链反而引入无关变量，这是刻意保留的边界
+  - `.entity(Record)` 用在了阶段 2（`kb-agent` 的 classify/draft 两个节点），本项目的 answer/refused/citations 仍由解析 `[n]` + 机器后验得到：让模型自评"我拒答了吗"会把拒答权交给模型，与防线 1 的立场冲突
+- [x] 已修复（`QaServiceAgentTest` 7 项锁行为：模板渲染、窗口只存问/答、会话隔离、空 ID 无状态）
 
 ### 🟠 AGT-02 · 无会话记忆（多轮零支持）
 - **问题**：每次提问独立无状态；`ChatMemory`/`MessageWindowChatMemory`/conversationId 全无。阶段 2"多轮会话可追溯"是硬验收，这里是最自然的落点
 - **修复**：`/api/query` 加可选 `conversationId` → `MessageWindowChatMemory` + advisor；引用与记忆并存怎么裁剪（窗口只留 answer 不留 context 全文）——面试好素材
-- [ ] 待处理
+- **修复实现（2026-10-25）**：`rag.memory.max-messages: 20` → `MessageWindowChatMemory`；`/api/query` 请求体加可选 `conversationId`，新增 `GET /api/session/{cid}` 与 `POST /api/session/{cid}/reset`；MCP `kb_query` 同步加可选 `conversationId`（description 里写明"追问要复用同一个 ID"）。裁剪决策：窗口只存 question/answer，检索上下文不进窗口（否则下一轮会把旧证据当成本轮依据，且窗口被原文撑爆）；防线 1 的拒答也入窗口（追问要知道被拒过）
+- [x] 已修复（单测锁"同会话可见、跨会话隔离、空 ID 不写 default 会话、窗口按配置裁剪"）
 
 ### 🟡 AGT-03 · 检索是固定管道，不是 Agent 策略（Agentic RAG 缺失）
 - **缺项**：查询改写（同义/缩写/指代消解）、HyDE、多路召回变体、Router（判断该不该查库/查哪个库）、检索质量自评后重试（self-RAG 雏形）
@@ -252,10 +258,10 @@
 
 | 批次 | 项 | 预估 | 时点 |
 |---|---|---|---|
-| ① 测试前 | ING-01 ✅、ING-02 ✅、QA-01 | ~2h | ING-01/02 已完成（含单测+端到端实测），剩 QA-01 |
+| ① 测试前 | ING-01 ✅、ING-02 ✅、QA-01 ✅ | ~2h | 全部完成（QA-01 于 2026-10-25 修复，含单测；历史 README 数字仍是旧口径，复测前不要混用） |
 | ② 本周 | TST-01(至少 contextLoads+ingest 回归 ✅ ingest 已有单测)、DAT-01 ✅(启动 warmup+ChunkStore 落 PG 已根治)、CFG-01 | ~ 天 | DAT-01 已提前完成 |
-| ③ 第 4 周 M1 收尾 | OBS-01、RES-01、RES-02、SEC-01、TST-02、PRO-01、README/D7 | ~1.5 天 | 挂 GitHub 前 |
-| ④ 与阶段 2 合并做 | AGT-01、AGT-02、API-02、PRO-02（工单 Agent 顺势作为 MCP Client 消费方）、AGT-03 | 融入第 5-7 周 | ChatClient/ChatMemory 是工单 Agent 的必经之路，一次投入两处收益 |
+| ③ 第 4 周 M1 收尾 | OBS-01、RES-01、RES-02、SEC-01、TST-02、PRO-01 ✅、README/D7 | ~1.5 天 | 挂 GitHub 前 |
+| ④ 与阶段 2 合并做 | AGT-01 ✅、AGT-02 ✅、API-02、PRO-02 ✅（kb-agent 已作为 MCP Client 消费方落地）、AGT-03 | 融入第 5-7 周 | 2026-10-25：④ 的 Agent 化三项已交付，剩 API-02 与 AGT-03（查询改写/self-RAG + 评测 diff） |
 | ⑤ 话术层（不实现） | SEC-03、SCA-01/02、DAT-02/03、AGT-04 | 笔记 | 第 11-12 周系统设计准备 |
 
 ## F. 启动测试注意事项（2026-10-17 更新：ING-01/02 与 DAT-01 已修复，原绕行条款废弃）
@@ -264,4 +270,4 @@
 2. ~~ING-02 修复前：每次 ingest 先 reset~~ 已幂等：确定性 chunk id + 写前按 source 删旧，重灌任意次数不翻倍（有单测锁行为）
 3. **内存模式：每次重启服务 = 全内存清空**，需重新 ingest；**postgres 模式（`--rag.chunk-store.type=postgres` + Milvus）：重启后 warmup 自动从库重建 BM25，无需重灌**（DAT-01 已根治，启动日志看 `BM25 warmup 完成: backend=postgres, chunks=N` 核对）
 4. 顺序：`/api/eval/dataset/validate`（SOP①）→ smoke run（20 题验方向）→ 全量 baseline → 单变量实验 + diff
-5. 在线延迟与评测延迟当前口径不同（QA-01），记录数字时注明来源
+5. ~~在线延迟与评测延迟当前口径不同（QA-01）~~ 口径已统一（`elapsedMs = 检索段 + 生成段`，`retrievalMs` 单独透出）；**2026-10-18 之前产出的 run 数字是旧口径，跨轮对比时注明来源**

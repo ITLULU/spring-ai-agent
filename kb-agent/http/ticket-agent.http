@@ -1,0 +1,137 @@
+### kb-agent 工单处理 Agent 演示脚本（端口 8001）
+### 用法：IDEA 里按顺序点左侧绿色箭头。前置条件两种：
+###   A. 完整链路：rag-kb 已在 :8000 跑着（且两边都有 AI_API_KEY）→ 第 2、3 节会自动结单
+###   B. 无 key / 无 rag-kb：MCP_CLIENT_ENABLED=false 启动本模块 → 第 2 节会 FAILED 并留下退避轨迹，
+###      第 1、4、5 节仍然可跑（状态机与存储不依赖模型）
+### 把 {{id}} 换成上一节响应里的 id 值即可。
+
+@host = http://localhost:8001
+
+### ------------------------------------------------------------
+### 0. 自证端点：状态转移表 + MCP 能力清单
+###    capabilities 里 kbAvailable=true 且 mcpTools 含 kb_query/kb_retrieve，
+###    才说明 kb-agent → rag-kb 的 Streamable HTTP 握手与 tools/list 真的通了
+### ------------------------------------------------------------
+
+GET {{host}}/api/tickets/state-machine
+
+###
+
+GET {{host}}/api/agent/capabilities
+
+### ------------------------------------------------------------
+### 1. 受理：证据足 + 引用齐的政策类工单 → 期望 AUTO_RESOLVED
+###    响应里的 confidence 是 0.5*证据分 + 0.3*引用有效性 + 0.2*模型自评，可手工复算
+### ------------------------------------------------------------
+
+POST {{host}}/api/tickets
+Content-Type: application/json
+
+{
+  "title": "年假咨询",
+  "description": "我入职满 3 年了，今年有几天带薪年假？",
+  "category": "hr_policy",
+  "priority": "P2"
+}
+
+### ------------------------------------------------------------
+### 1b. 高风险红线：工资类即使分数满分也必须转人工
+### ------------------------------------------------------------
+
+POST {{host}}/api/tickets
+Content-Type: application/json
+
+{
+  "title": "工资少发",
+  "description": "这个月实发比上月少了 800，是不是算错了？",
+  "category": "payroll",
+  "priority": "P1"
+}
+
+### ------------------------------------------------------------
+### 1c. 知识库答不上来的诉求：期望 PENDING_HUMAN，理由写进轨迹
+### ------------------------------------------------------------
+
+POST {{host}}/api/tickets
+Content-Type: application/json
+
+{
+  "title": "几点上班",
+  "description": "公司弹性工作制的具体时间是怎么规定的？",
+  "category": "hr_policy",
+  "priority": "P3"
+}
+
+### ------------------------------------------------------------
+### 2. 工单现场 + 逐节点审核轨迹（分诊/检索证据/判定三段）
+### ------------------------------------------------------------
+
+GET {{host}}/api/tickets/{{id}}
+
+### ------------------------------------------------------------
+### 3. 人工审核（HITL）
+###    APPROVE → AUTO_RESOLVED，resolvedBy=HUMAN
+###    REJECT  → 回到 NEW 并带着人的补充线索立刻重跑流水线
+### ------------------------------------------------------------
+
+POST {{host}}/api/tickets/{{id}}/review
+Content-Type: application/json
+
+{
+  "decision": "REJECT",
+  "note": "答复没错，但要补一句在哪个系统提请假申请"
+}
+
+###
+
+POST {{host}}/api/tickets/{{id}}/review
+Content-Type: application/json
+
+{
+  "decision": "APPROVE",
+  "note": "口径可以，采纳"
+}
+
+### ------------------------------------------------------------
+### 4. 手动重试一次（不等调度器）；排障时最常用
+###    attempts 已达上限时不再消耗模型调用，直接转人工并留痕
+### ------------------------------------------------------------
+
+POST {{host}}/api/tickets/{{id}}/retry
+
+### ------------------------------------------------------------
+### 5. Agentic 自由问答：模型自己选 MCP 工具 + 本地工单工具
+###    默认 conversationId = ticket-<id>，第二问的指代靠上一轮消解
+### ------------------------------------------------------------
+
+POST {{host}}/api/tickets/{{id}}/ask
+Content-Type: application/json
+
+{
+  "question": "入职满 3 年的年假有几天？"
+}
+
+###
+
+POST {{host}}/api/tickets/{{id}}/ask
+Content-Type: application/json
+
+{
+  "question": "那加班呢，怎么补偿？"
+}
+
+### 会话轨迹（阶段 2「多轮会话可追溯」的验收面：窗口只存问/答，不存政策原文）
+GET {{host}}/api/session/ticket-{{id}}
+
+### 清空会话（换个人接手这张单时用）
+POST {{host}}/api/session/ticket-{{id}}/reset
+
+### ------------------------------------------------------------
+### 6. 队列视图：待人工的积压、失败待重试的
+### ------------------------------------------------------------
+
+GET {{host}}/api/tickets?status=PENDING_HUMAN&limit=20
+
+###
+
+GET {{host}}/api/tickets?status=FAILED&limit=20

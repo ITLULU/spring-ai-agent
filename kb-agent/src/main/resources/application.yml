@@ -1,0 +1,54 @@
+spring:
+  application:
+    name: kb-agent
+  # 工单落 H2 file 模式：本地优先（重启不丢、零外部基建），生产换 MySQL/PG 只动 url。
+  # schema.sql 由 spring.sql.init 在 embedded 库上自动执行（幂等 IF NOT EXISTS）。
+  datasource:
+    url: ${TICKET_DB_URL:jdbc:h2:file:./data/kb-agent/tickets;DB_CLOSE_DELAY=-1;AUTO_SERVER=TRUE}
+    username: ${TICKET_DB_USER:sa}
+    password: ${TICKET_DB_PASSWORD:}
+  ai:
+    openai:
+      api-key: ${AI_API_KEY:sk-not-configured}
+      base-url: ${AI_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
+      chat:
+        options:
+          model: ${AI_CHAT_MODEL:qwen-plus}
+          temperature: 0.2      # 工单口径：结论要可核对，比创作性更需要稳定
+    # MCP Client（PRO-02）：连阶段1 的 rag-kb MCP Server，tools/list 里的 10 个工具
+    # 自动变成本进程的 ToolCallback。rag-kb 侧零改动——它不知道自己被谁消费了。
+    mcp:
+      client:
+        enabled: ${MCP_CLIENT_ENABLED:true}   # false → 不起 MCP 连接（rag-kb 未上线时仍可跑工单状态机）
+        name: kb-agent-ticket-client
+        version: 0.1.0
+        type: SYNC
+        request-timeout: 30s
+        streamable-http:
+          connections:
+            rag-kb:
+              url: ${RAG_KB_URL:http://localhost:8000}
+              endpoint: /mcp
+
+server:
+  port: ${KB_AGENT_PORT:8001}
+
+ticket:
+  agent:
+    # 自动结单闸门：置信度低于此值一律转人工，宁可多占人工名额也不让错误口径上线
+    auto-resolve-threshold: ${AUTO_RESOLVE_THRESHOLD:0.75}
+    # 置信度三个来源的权重（确定性代码算，不信模型自述）：
+    #   证据分 = kb_retrieve 的最佳向量相似度（检索层事实）
+    #   引用有效性 = [n] 是否越界/是否为空（可机器校验的忠实度代理）
+    #   模型自评 = 结构化输出里的 confidence 字段（只当弱信号）
+    weight-evidence: 0.5
+    weight-citation: 0.3
+    weight-self-report: 0.2
+    max-attempts: 3
+    retry-backoff-base-ms: 2000       # 指数退避：base * 2^(attempts-1)
+    retry-backoff-cap-ms: 60000
+    retry-scan-interval-ms: 5000      # 调度器扫描间隔；退避时间在库里，重启不丢
+    retry-scheduler-enabled: ${RETRY_SCHEDULER:true}
+    memory-max-messages: 20           # 与 rag-kb 同一裁剪口径：只存问/答，不存证据全文
+    # 业务红线：命中这些类别无论置信度多高都不自动结单（钱、劳动关系、合规都是错不起的）
+    high-risk-categories: ${HIGH_RISK_CATEGORIES:payroll,dismissal,compliance}

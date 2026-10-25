@@ -88,16 +88,29 @@ class RagKbToolsTest {
 
     @Test
     void kbQueryMapsAnswerFieldsAndTokens() {
-        when(qaService.answer(anyString())).thenReturn(new QueryResponse(
+        when(qaService.answer(anyString(), any())).thenReturn(new QueryResponse(
                 "满 3 年享有 10 天。[1]", false,
                 List.of(new QueryResponse.Citation(1, "c-1", "attendance_policy.md", "满 3 年")),
-                1234L, 800, 42));
+                1234L, 421L, 800, 42));
 
-        var out = tools().kbQuery("年假几天？");
+        var out = tools().kbQuery("年假几天？", "conv-1");
 
         assertEquals("满 3 年享有 10 天。[1]", out.get("answer"));
         assertEquals(false, out.get("refused"));
         assertEquals(1234L, out.get("elapsedMs"));
+        assertEquals(421L, out.get("retrievalMs"), "QA-01：检索段单独透出，MCP 侧也能归因慢在哪一段");
+    }
+
+    @Test
+    void kbQueryAdvertisesOptionalConversationId() {
+        ToolCallback kbQuery = Arrays.stream(MethodToolCallbackProvider.builder()
+                .toolObjects(tools()).build().getToolCallbacks())
+                .filter(c -> c.getToolDefinition().name().equals("kb_query"))
+                .findFirst().orElseThrow();
+        String schema = kbQuery.getToolDefinition().inputSchema();
+        assertTrue(schema.contains("conversationId"), "多轮入口未进契约，Agent 侧无法消解指代");
+        assertFalse(schema.contains("\"required\":[\"question\",\"conversationId\""),
+                "conversationId 必须是可选参数");
     }
 
     @Test

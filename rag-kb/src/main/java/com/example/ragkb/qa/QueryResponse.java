@@ -7,12 +7,17 @@ import java.util.List;
  * promptTokens/completionTokens 供"效果-成本"叙事记账（《方案》§3.1 tokens 字段）；
  * -1 表示模型未返回 usage。注意：查询 embedding 的 token 发生在 VectorStore 内部，
  * 此处不可见——成本口径要讲清楚边界。
+ * <p>延迟口径（QA-01）：elapsedMs = 检索段 + 生成段，是线上端到端时延；
+ * retrievalMs 单独暴露，用于判断"慢在检索还是慢在生成"。拒答时生成段为 0，
+ * elapsedMs == retrievalMs。评测链路的 latencyMs 由 EvalService 自己掐表（含 Judge），
+ * 两者口径不同不要混用。
  */
 public record QueryResponse(
         String answer,
         boolean refused,
         List<Citation> citations,
         long elapsedMs,
+        long retrievalMs,
         int promptTokens,
         int completionTokens) {
 

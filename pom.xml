@@ -9,7 +9,7 @@
     <version>0.1.0</version>
     <packaging>pom</packaging>
     <name>spring-ai-agent</name>
-    <description>Parent + aggregator for Spring AI modules: content-agent (idea-to-content pipeline) and rag-kb (RAG knowledge base)</description>
+    <description>Parent + aggregator for Spring AI modules: content-agent (idea-to-content pipeline), rag-kb (RAG knowledge base, MCP server) and kb-agent (stage-2 ticket-handling Agent, MCP client)</description>
 
     <properties>
         <java.version>21</java.version>
@@ -24,6 +24,7 @@
     <modules>
         <module>content-agent</module>
         <module>rag-kb</module>
+        <module>kb-agent</module>
     </modules>
 
     <dependencyManagement>

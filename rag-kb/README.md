@@ -606,7 +606,7 @@ rag-kb/
 - ~~ingest 非幂等、kb_ingest 目录支持未实现~~ 已修复（ING-01 目录批量入库 / ING-02 确定性 id + 按 source 删旧，均有单测）
 - **评测单 run 串行**：单线程 executor，千级 case 内是正确成本（方案 §0"不做清单"），万级需并发+限流
 - **解析天花板**：txt/md/pdf 文本层；表格 PDF/扫描件（tabula/OCR）在未做清单内（下方 TODO）
-- **在线延迟口径**：`/api/query` 的 elapsedMs 暂不含检索段（清单 QA-01，修复前两套数字不要混用）
+- ~~**在线延迟口径**：`/api/query` 的 elapsedMs 暂不含检索段~~ 已统一（清单 QA-01，2026-10-25）：`elapsedMs = 检索段 + 生成段`，`retrievalMs` 在 REST 与 MCP `kb_query` 都单独透出；10-18 那批 run 数字是旧口径，跨轮对比要注明来源
 
 ## FAQ
 
@@ -623,11 +623,11 @@ rag-kb/
 
 ## TODO（学习路线附带任务，编号关联 docs/rag-kb企业级问题排查清单.md）
 
-- [ ] 🔴 修 QA-01（延迟口径统一）——ING-01/ING-02 已完成 ✅
+- [x] 🔴 修 QA-01（延迟口径统一：`elapsedMs` 含检索段、`retrievalMs` 单独透出，评测与线上同一口径）——ING-01/ING-02 已完成 ✅
 - [ ] 表格 PDF / 扫描件解析（tabula / OCR，见 `DocumentParserService` 注释）
 - [ ] 语义切块（embedding 相似度断句）对比实验
 - [x] ChunkStore 落库（Postgres）+ 启动 warmup（DAT-01 已根治，见"持久化部署"节）；十万级演进路线见 `docs/评测机增强实施方案.md` §8
 - [ ] 评测集扩到 100 条（反向出题法，见 `QaCase` 注释；现 36 题：主集 26 + held-out 10，含 10 道对抗题）
 - [ ] RAGAS 指标对照：用 Python RAGAS 跑同一测试集，校准自建 Judge
-- [x] MCP 传输切 Streamable HTTP（PRO-01，2026-10 完成：protocol=STREAMABLE，探针实测 tools/list 10 工具 + tools/call 真执行）；ChatClient/ChatMemory 化（AGT-01/02）仍待做
-- [x] 把本系统封装成工具接入 Agent 生态（MCP Server 已完成，见"MCP 专题"节；接阶段2工单处理 Agent 待做）
+- [x] MCP 传输切 Streamable HTTP（PRO-01，2026-10 完成：protocol=STREAMABLE，探针实测 tools/list 10 工具 + tools/call 真执行）；ChatClient/ChatMemory 化（AGT-01/02，2026-10-25 完成：`AgentChatConfig` + `prompts/qa-system.st` 外置 + `/api/query` 可选 `conversationId` + `/api/session/*`，`QaServiceAgentTest` 7 项锁行为）
+- [x] 把本系统封装成工具接入 Agent 生态（MCP Server 见"MCP 专题"节；**阶段 2 消费侧已落地**：新模块 [`kb-agent`](../kb-agent/README.md) 以 `spring-ai-starter-mcp-client` 连 `/mcp`，工单流水线调 `kb_query`/`kb_retrieve`，rag-kb 侧零改动——PRO-02 关闭）

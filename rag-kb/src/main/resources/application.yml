@@ -77,6 +77,9 @@ rag:
     final-k: 5                    # 喂给 LLM 的上下文块数
     hybrid: true                  # false → 纯向量（对照组）
     min-vector-similarity: 0.30   # 拒答阈值：漏答 vs 幻觉的权衡点，用评测集调
+  memory:
+    max-messages: 20              # AGT-02 会话窗口（条数不是 token）：只存 question/answer，
+                                  # 检索上下文走 system 模板不进窗口 → 20 条 ≈ 10 轮，成本上界可算
   rerank:
     enabled: ${RERANK_ENABLED:false}   # 默认关闭：未部署 TEI 时主链路不受牵连；true → 启用 TEI/托管 rerank API（persistent profile / 环境变量显式打开）
     base-url: ${RERANK_URL:http://localhost:8087/rerank}   # 本地 TEI GPU 版默认映射端口；CPU 版/托管 API 用 RERANK_URL 覆盖

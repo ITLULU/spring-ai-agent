@@ -271,7 +271,9 @@ public class EvalService {
         long t0 = System.currentTimeMillis();
 
         // 检索一次，既做现场快照（归因依据）又复用给生成——不重复调 embedding
+        long retrievalStart = System.currentTimeMillis();
         List<RetrievedChunk> chunks = retrievalService.retrieve(c.question());
+        long retrievalMs = System.currentTimeMillis() - retrievalStart;
         List<CaseResult.RetrievalRow> rows = chunks.stream()
                 .map(rc -> new CaseResult.RetrievalRow(rc.chunkId(), rc.source(),
                         rc.vectorScore(), rc.bm25Score(), rc.fusedScore(),
@@ -279,7 +281,9 @@ public class EvalService {
                 .toList();
         boolean evidenceHit = rows.stream().anyMatch(CaseResult.RetrievalRow::evidenceHit);
 
-        QueryResponse resp = qaService.answer(c.question(), chunks);
+        // conversationId 恒传 null：评测的每题必须是无状态独立问答，
+        // 否则前题证据会串进后题（记忆按请求启用，见 QaService）
+        QueryResponse resp = qaService.answer(c.question(), chunks, retrievalMs, null);
 
         String judgeVerdict = "N/A";
         int judgePrompt = 0;

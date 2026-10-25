@@ -54,15 +54,18 @@ public class RagKbTools {
             对企业规章制度知识库提问，返回带编号引用（citations）的答案。
             内部执行完整 RAG 链路：混合检索→重排→LLM 生成。超出文档范围的问题会拒答（refused=true）。
             回答政策类问题优先用本工具而不是 kb_retrieve（后者只召回、不调 LLM）。
+            追问（含"那/它/这个"等指代词）必须传同一个 conversationId，否则服务端看不到上一轮、无法消解指代。
             """)
     public Map<String, Object> kbQuery(
-            @ToolParam(description = "自然语言问题，例如：员工入职满 3 年有多少天年假？") String question) {
-        QueryResponse r = qaService.answer(question);
+            @ToolParam(description = "自然语言问题，例如：员工入职满 3 年有多少天年假？") String question,
+            @ToolParam(required = false, description = "可选：会话 ID，同一 ID 内支持多轮追问；留空即单轮无状态问答") String conversationId) {
+        QueryResponse r = qaService.answer(question, conversationId);
         var m = new LinkedHashMap<String, Object>();
         m.put("answer", r.answer());
         m.put("refused", r.refused());
         m.put("citations", r.citations());
         m.put("elapsedMs", r.elapsedMs());
+        m.put("retrievalMs", r.retrievalMs());
         m.put("tokens", Map.of("prompt", r.promptTokens(), "completion", r.completionTokens()));
         return m;
     }
