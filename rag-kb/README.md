@@ -61,15 +61,43 @@ Markdown 报告由 `GET /api/eval/runs/{runId}/report` 从 JSONL 渲染——这
 
 | 环境变量 | 对应配置键 | 默认值 | 何时改 |
 |---|---|---|---|
-| `AI_API_KEY` | spring.ai.openai.api-key | `sk-not-configured`（**首次调用才报错，不阻启动**） | 必设 |
-| `AI_BASE_URL` | spring.ai.openai.base-url | DashScope 兼容端点 | 换平台 |
-| `AI_CHAT_MODEL` / `AI_EMBED_MODEL` | chat/embedding options.model | `qwen-plus` / `text-embedding-v3` | 换模型 |
+| `AI_API_KEY` | spring.ai.openai.api-key（两条腿的兜底） | `sk-not-configured`（**首次调用才报错，不阻启动**） | 必设 |
+| `AI_BASE_URL` | spring.ai.openai.base-url（两条腿的兜底） | DashScope 兼容端点 | 换平台 |
+| `AI_CHAT_BASE_URL` / `AI_CHAT_API_KEY` | spring.ai.openai.**chat**.base-url / api-key | 回落 `AI_BASE_URL` / `AI_API_KEY` | **生成腿单独指端点/key**（如百炼 Token Plan 包月） |
+| `AI_EMBED_BASE_URL` / `AI_EMBED_API_KEY` | spring.ai.openai.**embedding**.base-url / api-key | 回落 `AI_BASE_URL` / `AI_API_KEY` | **向量腿单独指**（包月端点没有 embedding，只能走按量） |
+| `AI_CHAT_MODEL` / `AI_EMBED_MODEL` | chat/embedding options.model | `qwen-plus` / `text-embedding-v3` | 换模型（**包月端点没有 `qwen-plus`**，要用 `qwen3.7-plus` 这类它清单里的名字） |
 | `EVAL_JUDGE_MODEL` | rag.eval.judge.model | `qwen-max`（独立裁判；显式置空才复用 chat 模型，启动 WARN） | ⚠️ 换非 DashScope 平台（如 DeepSeek）**必须同步覆盖**——否则裁判调用失败全记 ERROR |
-| `EVAL_JUDGE_API_KEY` / `EVAL_JUDGE_BASE_URL` | rag.eval.judge.* | 回落主配置 | 裁判用另一家平台时 |
+| `EVAL_JUDGE_API_KEY` / `EVAL_JUDGE_BASE_URL` | rag.eval.judge.* | 回落**生成腿**（`AI_CHAT_*`，再回落 `AI_*`） | 裁判用另一家平台时 |
 | `RERANK_URL` | rag.rerank.base-url | `http://localhost:8087/rerank` | 配合 `rag.rerank.enabled=true`（默认关）接 TEI/托管 rerank API；仓库 compose 的 CPU 版映射在 8087 直接可用；其他端口/托管 API 用本变量覆盖 |
 | `MILVUS_HOST` / `MILVUS_PORT` | vectorstore.milvus.client.* | `localhost` / `19530` | 切 Milvus |
 | `CHUNK_STORE_TYPE` | rag.chunk-store.type | `memory` | `postgres` → chunk 语料落库，重启不丢（见“持久化部署”） |
 | `PG_URL` / `PG_USER` / `PG_PASSWORD` | rag.postgres.* | `jdbc:postgresql://localhost:5432/ragkb` / `postgres` / `postgres` | 仅 postgres 模式生效 |
+
+> **⚠️ base-url 不要带 `/v1`。** 官网 OpenAI SDK 示例给的 `https://…/compatible-mode/v1` 是给 `openai`
+> 库用的；Spring AI 的 `*.base-url` 是**前缀**，它自己补 `v1/chat/completions`，照抄就变成
+> `…/v1/v1/chat/completions`，症状是一条不带路径线索的 HTTP 400。填 `…/compatible-mode` 即可，
+> 写错时启动日志会由 `AgentChatConfig` 直接 WARN 出正确值（2026-10-25 加，实测能抓出这两条腿的错配）。
+
+### 两条腿两把 key（百炼 Token Plan 个人版 + 按量付费）
+
+百炼的**包月 Token Plan 个人版** key 以 `sk-sp-` 开头，只在
+`https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode` 认（拿它打 dashscope 直接
+`401 invalid_api_key`），而且**它的模型清单里没有任何 embedding 模型**——RAG 的向量腿离不开
+embedding，所以只能"生成吃包月额度、embedding 走按量"。为此 chat 与 embedding 的
+端点和 key 都拆成了独立配置（见上表 `AI_CHAT_*` / `AI_EMBED_*`），已落成 `tokenplan` profile：
+
+```bash
+export AI_CHAT_API_KEY="$AI_API_KEY"        # 包月那把（sk-sp- 开头）
+export AI_EMBED_API_KEY="$AI_API_KEY1"      # 按量那把（普通 sk- 开头）
+sh rag-kb/scripts/provider-selfcheck.sh     # 零 token 自检：GET /models，只看鉴权与模型名
+mvn -B spring-boot:run -Dspring-boot.run.profiles=tokenplan
+```
+
+`provider-selfcheck.sh` 读的就是 application.yml 那组变量名（含三级回落），所以**脚本通过 == 应用配置对**；
+它只发 `GET /models`，不可能产生生成或 embedding 费用。退出码 0=两条腿都通，
+1=有腿鉴权失败，2=端点通但模型名不在清单里（最常见的两类错配就是 `/v1` 和 `qwen-plus`）。
+**未验证**：包月端点是否支持 SSE 流式（API-02）与 JSON/结构化输出（kb-agent 的 `.entity()` 分诊依赖），
+这两项要一次真实调用才能确认。
 
 | 配置键（application.yml） | 默认 | 说明 |
 |---|---|---|

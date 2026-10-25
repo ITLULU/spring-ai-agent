@@ -1,0 +1,41 @@
+# 生成腿走百炼「Token Plan 个人版」（包月），向量腿走按量付费 —— 两把 key、两个端点。
+#
+# 为什么必须拆开（2026-10-25 实测，全部零 token 探针，没有产生任何调用费）：
+#   · 包月 key 以 sk-sp- 开头，只在 token-plan.cn-beijing.maas.aliyuncs.com 认；
+#     拿它打 dashscope.aliyuncs.com 直接 401 invalid_api_key；
+#   · 包月端点的模型清单里**没有任何 embedding 模型**（有 qwen3.7-plus/qwen3.8-max/glm-5.x/
+#     deepseek-v4.x/wan*-image/音频，以及一个 auto 路由），而 rag-kb 的向量检索离不开 embedding，
+#     所以这条腿只能回到按量端点。
+#
+# 启动方式（key 一律来自环境变量，本文件不含任何凭据字面量）：
+#   export AI_CHAT_API_KEY="$AI_API_KEY"      # 包月那把（sk-sp- 开头）
+#   export AI_EMBED_API_KEY="$AI_API_KEY1"    # 按量那把（普通 sk- 开头）
+#   mvn -B spring-boot:run -Dspring-boot.run.profiles=tokenplan
+#
+# 起之前先跑零 token 自检（GET /models，只鉴权、不生成）：
+#   sh rag-kb/scripts/provider-selfcheck.sh
+#
+# 未验证项（要一次真实调用才能确认，我不会自己跑）：包月端点是否支持 SSE 流式、
+# 是否支持 OpenAI 的 JSON/结构化输出模式（kb-agent 的 .entity() 分诊依赖它）。
+spring:
+  ai:
+    openai:
+      chat:
+        base-url: ${AI_CHAT_BASE_URL:https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode}
+        api-key: ${AI_CHAT_API_KEY:${AI_API_KEY:sk-not-configured}}
+        options:
+          model: ${AI_CHAT_MODEL:qwen3.7-plus}
+      embedding:
+        base-url: ${AI_EMBED_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
+        api-key: ${AI_EMBED_API_KEY:${AI_API_KEY:sk-not-configured}}
+        options:
+          model: ${AI_EMBED_MODEL:text-embedding-v3}
+
+rag:
+  eval:
+    judge:
+      # 裁判与生成同端点（都吃包月额度），但**必须不同模型名**——同模型自评有 self-preference 偏差，
+      # 主配置里那句 WARN 就是为这种情况留的
+      model: ${EVAL_JUDGE_MODEL:qwen3.7-max}
+      base-url: ${EVAL_JUDGE_BASE_URL:${AI_CHAT_BASE_URL:https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode}}
+      api-key: ${EVAL_JUDGE_API_KEY:${AI_CHAT_API_KEY:${AI_API_KEY:sk-not-configured}}}

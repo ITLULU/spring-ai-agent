@@ -1,5 +1,9 @@
 package com.example.ragkb.config;
 
+import jakarta.annotation.PostConstruct;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.memory.ChatMemoryRepository;
@@ -22,6 +26,33 @@ import org.springframework.context.annotation.Lazy;
  */
 @Configuration
 public class AgentChatConfig {
+
+    private static final Logger log = LoggerFactory.getLogger(AgentChatConfig.class);
+
+    @Value("${spring.ai.openai.chat.base-url:${spring.ai.openai.base-url:}}")
+    private String chatBaseUrl;
+
+    @Value("${spring.ai.openai.embedding.base-url:${spring.ai.openai.base-url:}}")
+    private String embeddingBaseUrl;
+
+    /**
+     * 端点前缀写错的开机自检。官网 OpenAI SDK 示例给的 base_url 是 `.../compatible-mode/v1`，
+     * 而 Spring AI 自己会补 `v1/chat/completions`——照抄就变成 `.../v1/v1/chat/completions`，
+     * 症状是一条不带路径线索的 HTTP 400。分腿配置（AI_CHAT_BASE_URL / AI_EMBED_BASE_URL）之后
+     * 这个坑的概率翻倍，所以启动时直接说清楚该怎么改。
+     */
+    @PostConstruct
+    void warnOnVersionSuffixInBaseUrl() {
+        warnIfVersionSuffix("spring.ai.openai.chat.base-url", chatBaseUrl);
+        warnIfVersionSuffix("spring.ai.openai.embedding.base-url", embeddingBaseUrl);
+    }
+
+    private static void warnIfVersionSuffix(String key, String value) {
+        if (value != null && value.endsWith("/v1")) {
+            log.warn("配置项 {} = {} 以 /v1 结尾，Spring AI 会再补一次 v1/... 导致 400；"
+                    + "应填不含版本段的端点前缀：{}", key, value, value.substring(0, value.length() - 3));
+        }
+    }
 
     /**
      * 会话记忆仓库：进程内（与本项目 memory 模式的存储纪律一致）。

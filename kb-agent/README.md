@@ -119,6 +119,14 @@ cd ../kb-agent && mvn -B spring-boot:run       # :8001，工单落 ./data/kb-age
 人工 APPROVE/REJECT、409/404/400 边界、重启后历史单仍在。
 只有"答得对不对"（分诊质量、引用是否真支撑、自动结单率）必须带 key 才有意义。
 
+**想拿包月额度跑生成**：本模块只有 chat 一条腿，直接复用 rag-kb 的 `AI_CHAT_*` 三件套
+（`AI_CHAT_BASE_URL` / `AI_CHAT_API_KEY` / `AI_CHAT_MODEL`），两个模块不会错配。
+两个必踩过的坑：base-url **不能带 `/v1`**（Spring AI 自己补，照抄官网 SDK 示例会变成 `//v1/v1/...` → 400），
+模型名要用目标端点清单里的名字（百炼 Token Plan 个人版没有 `qwen-plus`，也没有任何 embedding 模型）。
+零 token 自检：`sh rag-kb/scripts/provider-selfcheck.sh`（只发 `GET /models`，不产生费用）。
+⚠️ **未验证**：包月端点是否支持 `.entity()` 结构化输出（本模块 classify/draft 依赖它）与 SSE 流式，
+需要一次真实调用才能确认。
+
 演示脚本：[http/ticket-agent.http](http/ticket-agent.http)（受理 → 看轨迹 → 审核 → 追问 → 自检）。
 
 自检端点就是给评审看的自证：

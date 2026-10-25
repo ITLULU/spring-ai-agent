@@ -12,13 +12,22 @@ spring:
     openai:
       # OpenAI 兼容接口均可：阿里云 DashScope / DeepSeek / OpenAI / 本地 Ollama(-v1)
       # 通过环境变量注入，切勿把 key 写进代码提交到 GitHub
+      #
+      # 两条腿分开指端点/指 key（百炼 Token Plan 个人版的现实约束）：
+      #   · 生成腿 AI_CHAT_*  —— 包月 sk-sp- key 只能在 token-plan.cn-beijing.maas.aliyuncs.com 用；
+      #   · 向量腿 AI_EMBED_* —— 包月清单里没有任何 embedding 模型，必须走按量的 dashscope。
+      # 每层都是"专用 → 全局 → 占位"三级回落，不设任何 key 字面量；只想单换一条腿时只设那一条。
       api-key: ${AI_API_KEY:sk-not-configured}
       base-url: ${AI_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
       chat:
+        base-url: ${AI_CHAT_BASE_URL:${AI_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}}
+        api-key: ${AI_CHAT_API_KEY:${AI_API_KEY:sk-not-configured}}
         options:
           model: ${AI_CHAT_MODEL:qwen-plus}
           temperature: 0.1        # RAG 生成用低温度：可事实校验的场景不需要创造性
       embedding:
+        base-url: ${AI_EMBED_BASE_URL:${AI_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}}
+        api-key: ${AI_EMBED_API_KEY:${AI_API_KEY:sk-not-configured}}
         options:
           model: ${AI_EMBED_MODEL:text-embedding-v3}
     # MCP Server（Streamable HTTP over WebMVC）：把知识库+评测机封装成标准 MCP tools，
@@ -89,6 +98,9 @@ rag:
     runs-dir: output/eval-runs            # JSONL：每 run 一个文件，逐条 append
     judge-errors-file: data/eval/judge-errors.md   # §4.2 人工复核沉淀的裁判失误清单
     judge:
-      model: ${EVAL_JUDGE_MODEL:qwen-max}         # 留空→复用 chat 模型（有 self-preference 风险，启动会 WARN）
-      api-key: ${EVAL_JUDGE_API_KEY:${AI_API_KEY:sk-not-configured}}
-      base-url: ${EVAL_JUDGE_BASE_URL:${AI_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}}
+      # 裁判也是一次 chat 调用，所以默认跟着生成腿走（同一个端点/同一把 key），
+      # 避免出现"生成用包月 key、裁判拿同一把 key 去打 dashscope"这种必然 401 的组合。
+      # 模型必须是指向端点提供的名字：包月清单里没有 qwen-max，用 qwen3.7-max（见 tokenplan profile）。
+      model: ${EVAL_JUDGE_MODEL:qwen-max}
+      api-key: ${EVAL_JUDGE_API_KEY:${AI_CHAT_API_KEY:${AI_API_KEY:sk-not-configured}}}
+      base-url: ${EVAL_JUDGE_BASE_URL:${AI_CHAT_BASE_URL:${AI_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}}}

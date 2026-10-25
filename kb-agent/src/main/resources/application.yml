@@ -19,6 +19,11 @@ spring:
       api-key: ${AI_API_KEY:sk-not-configured}
       base-url: ${AI_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
       chat:
+        # 工单 Agent 只有 chat 这一条腿（分诊 classify + 装配 draft），所以它跟着生成腿走：
+        # 与 rag-kb 用同一组 AI_CHAT_* 变量，两个模块不会出现"一个走包月、一个走按量"的错配。
+        # 注意包月端点的模型名与 dashscope 不同（qwen3.7-plus 而不是 qwen-plus），用 AI_CHAT_MODEL 覆盖。
+        base-url: ${AI_CHAT_BASE_URL:${AI_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}}
+        api-key: ${AI_CHAT_API_KEY:${AI_API_KEY:sk-not-configured}}
         options:
           model: ${AI_CHAT_MODEL:qwen-plus}
           temperature: 0.2      # 工单口径：结论要可核对，比创作性更需要稳定
