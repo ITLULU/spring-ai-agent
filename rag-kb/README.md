@@ -97,6 +97,19 @@ Markdown 报告由 `GET /api/eval/runs/{runId}/report` 从 JSONL 渲染——这
 }
 ```
 
+**真机一次调用（2026-10-25，qwen-plus + text-embedding-v3，阿里云 compatible-mode）**——
+问"员工入职满3年有几天年假？用完当年没用完会怎样？"，只灌了 `attendance_policy.md`（2 chunks）：
+
+```
+answer    : - 入职满3年享有10天带薪年假 [1]；
+            - 未使用完的年假不折算工资，不可累积到次年，须在当年12月31日前使用完毕 [1]。
+refused   : false      citations: 2 条，均来自 attendance_policy.md
+elapsedMs : 1870（retrievalMs 124 → 生成段 1746）    tokens: prompt 619 / completion 54
+```
+
+即 QA-01 的口径在真机上成立：`elapsedMs = 检索段 + 生成段`，且检索段只占总时延 6.6%——
+"慢在生成不在检索"这句结论现在有数字支撑，不是推测。
+
 `POST /api/query/stream`（API-02，SSE）——同一个问题的流式形态（事件名与字段结构真实，数值示意）。
 引用清单在 `meta` 里先到，所以 UI 可以先挂脚注再逐字渲染；`done` 的字段与上面那份 JSON 一一对应，
 两条路径不会长出两套口径：
