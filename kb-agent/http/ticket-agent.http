@@ -11,6 +11,8 @@
 ### 0. 自证端点：状态转移表 + MCP 能力清单
 ###    capabilities 里 kbAvailable=true 且 mcpTools 含 kb_query/kb_retrieve，
 ###    才说明 kb-agent → rag-kb 的 Streamable HTTP 握手与 tools/list 真的通了
+###    （2026-10-25 实跑：rag-kb:8000 + kb-agent:8001 → kbAvailable=true、10 个工具全列出；
+###     无 key 也能验这一段，因为 tools/list 不碰模型。工具真正执行到检索要靠 rag-kb 侧的 key）
 ### ------------------------------------------------------------
 
 GET {{host}}/api/tickets/state-machine
@@ -72,6 +74,7 @@ GET {{host}}/api/tickets/{{id}}
 ### 3. 人工审核（HITL）
 ###    APPROVE → AUTO_RESOLVED，resolvedBy=HUMAN
 ###    REJECT  → 回到 NEW 并带着人的补充线索立刻重跑流水线
+###    （已实测：双进程跑通 approve 结单、重复 approve 409、未知单 404）
 ### ------------------------------------------------------------
 
 POST {{host}}/api/tickets/{{id}}/review
@@ -90,6 +93,17 @@ Content-Type: application/json
 {
   "decision": "APPROVE",
   "note": "口径可以，采纳"
+}
+
+### 同一单再批一次：期望 409（不是 500），body 里带 from→to 与合法目标
+### 这就是"复核界面重复点击/两个执行体抢单"时人该看到的东西
+
+POST {{host}}/api/tickets/{{id}}/review
+Content-Type: application/json
+
+{
+  "decision": "APPROVE",
+  "note": "再点一次（应 409）"
 }
 
 ### ------------------------------------------------------------

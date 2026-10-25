@@ -2,7 +2,14 @@ spring:
   application:
     name: kb-agent
   # 工单落 H2 file 模式：本地优先（重启不丢、零外部基建），生产换 MySQL/PG 只动 url。
-  # schema.sql 由 spring.sql.init 在 embedded 库上自动执行（幂等 IF NOT EXISTS）。
+  # ⚠️ sql.init.mode 必须显式 always：默认值 embedded 只认 jdbc:h2:mem: 前缀，
+  # file 模式会被判定为"非内嵌库"而跳过 schema.sql，实测症状是启动成功但
+  # 任何写操作报 Table "TICKET" not found（clone 即跑的承诺直接破产）。
+  # schema.sql 全是 CREATE ... IF NOT EXISTS，每次启动重跑幂等。
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema.sql
   datasource:
     url: ${TICKET_DB_URL:jdbc:h2:file:./data/kb-agent/tickets;DB_CLOSE_DELAY=-1;AUTO_SERVER=TRUE}
     username: ${TICKET_DB_USER:sa}

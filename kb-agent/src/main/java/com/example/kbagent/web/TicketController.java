@@ -4,6 +4,8 @@ import java.util.List;
 import java.util.Map;
 
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -140,5 +142,20 @@ public class TicketController {
                 .collect(java.util.stream.Collectors.toMap(
                         TicketStatus::name, s -> s.allowedNext().stream().map(Enum::name).sorted().toList(),
                         (a, b) -> a, java.util.LinkedHashMap::new)));
+    }
+
+    /**
+     * 非法流转 → 409，并把状态机给出的理由原样带回。
+     *
+     * 为什么单独立一个 handler 而不是在各方法里 catch：CAS 撞墙点分散在 review/retry/process
+     * 三处，逐个 catch 迟早漏一个——实测漏的就是"已结单再批一次"，那时它冒成 500，
+     * 评审界面只看到 Internal Server Error，人不知道是自己抢了还是 Agent 抢了。
+     * 409 的 body 里带上 from→to 与合法目标，复核界面可以直接照着提示下一步该点什么。
+     */
+    @ExceptionHandler(TicketStatus.IllegalTransitionException.class)
+    public ResponseEntity<Map<String, Object>> onIllegalTransition(TicketStatus.IllegalTransitionException e) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
+                "status", 409, "error", "状态冲突", "message", e.getMessage(),
+                "hint", "这单可能已被人工或另一个执行体改过状态；先 GET /api/tickets/{id} 看现状"));
     }
 }

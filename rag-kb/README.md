@@ -528,7 +528,8 @@ docker compose --profile rerank up -d     # 追加 CPU 版 rerank（8087）
 >    本体跑的（20/40 候选整批返回 + 死端口反向验证降级），可复现命令写在那份 README 里。
 > 3. 顺带一条环境坑：`mvn -o` 在这台机器上对 rag-kb 会报 `present, but unavailable`，
 >    那是 Maven 3.10 的 `_remote.repositories` 归属校验、**不是缺依赖**（本地仓由 settings.xml 指到
->    `/Users/a/m2/repository`，不在 `~/.m2`），联网走阿里镜像即可 `mvn -B test`（40 测试全绿）。
+>    `/Users/a/m2/repository`，不在 `~/.m2`），联网走阿里镜像即可 `mvn -B test`（rag-kb 模块 52 项全绿，
+>    含 2026-10-25 补的 `RagKbApplicationContextTest`：真容器 refresh、10 个 MCP 工具、会话窗口裁剪）。
 
 > 已有统一托管基建的机器（按服务拆目录的自建 compose）可不启本文件，用
 > `MILVUS_HOST`/`PG_URL`/`RERANK_URL` 环境变量指向你的服务即可（端口不同也没关系，覆盖默认值）。

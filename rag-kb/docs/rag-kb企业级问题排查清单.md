@@ -163,13 +163,22 @@
 
 ### B7. 测试与 CI/CD 交付（TST）
 
-#### 🟠 TST-01 · web 层与全链路零测试
-- **现状**：29 个测试全在纯逻辑层（chunking/BM25/eval store/mcp 契约），无一个 `@SpringBootTest`；Controller 路由/序列化/错误码、启动装配（@Lazy 断环）全部裸奔——`mvn spring-boot:run` 起不来这类问题现在只能靠人肉发现
-- **目标**：
-  1. `@SpringBootTest` contextLoads（用 MockChatModel/MockEmbeddingModel bean 顶替，不需要真 key）
-  2. `MockMvc` 打通 `/api/ingest→/api/query→/api/eval` 关键路径（外部 LLM 用 `MockWebServer` stub OpenAI 兼容响应）
-  3. Judge 解析边界用例（`out` 含多行/小写/correct 混排）
-- [ ] 待处理
+#### 🟠 TST-01 · web 层零测试；启动装配测试**已由事故补上**
+- **现状**：纯逻辑层测试 52 项，`@SpringBootTest` 只有 `RagKbApplicationContextTest` 一个（2026-10-25 补）；Controller 路由/序列化/错误码仍无 MockMvc 覆盖
+- **为什么要先补 contextLoads（真实代价）**：AGT-01 把 `QaService` 改成注入 `ChatClient` 之后，
+  当时 48 项单测**全绿但进程起不来**——`ChatClient.builder(chatModel)` 在 Bean 构建期就解引用
+  `@Lazy ChatModel` 代理，于是 `qaService → kbChatClient → openAiChatModel → toolCallingManager →
+  toolCallbackResolver → ragKbToolCallbackProvider → ragKbTools → qaService` 重新闭合成环。
+  手工 new 对象的单测永远看不到 bean 图，这类回归只有真容器能拦
+- **修复实现（2026-10-25）**：`kbChatClient` 改 `@Bean @Lazy`，`QaService` 构造参数加 `@Lazy ChatClient`
+  （两处都要，缺一处仍成环）；新增 `RagKbApplicationContextTest` 4 项：上下文能 refresh、
+  注入到 `QaService` 的必须是延迟代理（锁机制而非只锁结果）、MCP 10 个工具齐全、
+  `rag.memory.max-messages` 真把窗口裁到 20 条；rag-kb 实启 `Started RagKbApplication in 1.4s`
+- **目标**（剩余）：
+  1. `MockMvc` 打通 `/api/ingest→/api/query→/api/eval` 关键路径（外部 LLM 用 `MockWebServer` stub OpenAI 兼容响应）
+  2. Judge 解析边界用例（`out` 含多行/小写/correct 混排）
+- [x] contextLoads 部分已完成（含上面那条启动环事故）
+- [ ] 待处理：web 层 MockMvc 全链路
 
 #### 🟠 TST-02 · 无 CI，README"30 秒可跑"没有机器背书
 - **现状**：无 `.github/workflows`；无 jacoco
@@ -203,9 +212,13 @@
 #### 🟡 PRO-02 · 只做了 Server，没有 Client 消费侧
 - **现状**：rag-kb 是工具提供方；"阶段2 工单 Agent 通过 MCP Client 连 rag-kb"未起步（README:111 已自标 TODO）
 - **目标**：`spring-ai-starter-mcp-client` 写一个最小 Agent（ChatClient + ToolCallback 从 MCP 发现），这条链路通了，rag-kb 才从"问答系统"变成"Agent 生态里的检索工具"——正是阶段 2 第 6-7 周的主线
-- **落地（2026-10-25）**：新模块 [`kb-agent`](../../kb-agent/README.md)（端口 8001）用 `spring-ai-starter-mcp-client` 的 `streamable-http.connections.rag-kb` 连本服务 `/mcp`，`KbMcpGateway` 按工具名取 `ToolCallback` 调 `kb_query`/`kb_retrieve`，rag-kb 侧零改动。工单流水线（分诊→检索→答复→装配→置信闸门）+ 状态机 + 退避重试 + 人工审核已带 35 项单测
-- **仍待验**：`GET :8001/api/agent/capabilities` 需看到 `kbAvailable=true` 且 `mcpTools` 非空——要 rag-kb 与 kb-agent 同时带 key 起，本会话无 key 未跑
-- [x] 消费侧代码已完成（单测 + 无 key 实启验证），端到端实连待用户带 key 复验
+- **落地（2026-10-25）**：新模块 [`kb-agent`](../../kb-agent/README.md)（端口 8001）用 `spring-ai-starter-mcp-client` 的 `streamable-http.connections.rag-kb` 连本服务 `/mcp`，`KbMcpGateway` 按工具名取 `ToolCallback` 调 `kb_query`/`kb_retrieve`，rag-kb 侧零改动。工单流水线（分诊→检索→答复→装配→置信闸门）+ 状态机 + 退避重试 + 人工审核已带 56 项单测
+- **端到端实连（2026-10-25 已实测，不需要 key 的部分）**：rag-kb:8000 与 kb-agent:8001 双进程同起 →
+  握手日志 `Server response with Protocol: 2025-06-18 … Implementation[name=rag-kb-mcp-server]`，
+  `GET :8001/api/agent/capabilities` 返回 `kbAvailable=true` 且 `mcpTools` 列出 10 个工具；
+  再用 curl 直连 `/mcp` 发 `tools/call kb_retrieve`，服务端真的执行到向量检索并回
+  `isError:true` + `HTTP 401 Incorrect API key`——**证明传输与会话、工具发现与调用链全通，唯一缺的是 key**
+- [x] 消费侧代码 + 端到端 MCP 实连均已验证；带 key 的真实答复质量仍待复验
 
 ---
 
@@ -217,6 +230,11 @@
 - **修复**：QaService 改 `ChatClient.builder(chatModel).defaultAdvisors(...)`；system prompt 外置模板；(answer, refused, citations[]) 用 `.entity(Record)` 一次生成 + 机器校验
 - **修复实现（2026-10-25）**：新增 `config/AgentChatConfig`（`@Bean ChatClient kbChatClient(@Lazy ChatModel)`，@Lazy 断 starter 的工具解析环）；`QaService` 改走 `chatClient.prompt().system(s -> s.text(classpath:prompts/qa-system.st).param("context", …)).user(question)`，检索上下文只进 system；记忆用 `MessageChatMemoryAdvisor` **按请求挂**（不是 defaultAdvisors），保证评测链路 `conversationId=null` 时无状态。`EvalJudge` 仍裸调 `ChatModel`——裁判要的是"最小干预的一次打分"，挂 advisor 链反而引入无关变量，这是刻意保留的边界
   - `.entity(Record)` 用在了阶段 2（`kb-agent` 的 classify/draft 两个节点），本项目的 answer/refused/citations 仍由解析 `[n]` + 机器后验得到：让模型自评"我拒答了吗"会把拒答权交给模型，与防线 1 的立场冲突
+  - **改造后踩到的环（2026-10-25 实启发现）**：`@Lazy ChatModel` 只断开"字段里存代理"这条路，
+    而 `ChatClient.builder(chatModel)` **在 Bean 构建期就要读这个代理**，于是环又闭合了，
+    症状是 48 项单测全绿但 `spring-boot:run` 起不来。解法是两处一起延迟：
+    `@Bean @Lazy kbChatClient` + `QaService` 构造参数 `@Lazy ChatClient`，
+    并由 `RagKbApplicationContextTest` 锁住（见 TST-01）
 - [x] 已修复（`QaServiceAgentTest` 7 项锁行为：模板渲染、窗口只存问/答、会话隔离、空 ID 无状态）
 
 ### 🟠 AGT-02 · 无会话记忆（多轮零支持）
@@ -259,9 +277,9 @@
 | 批次 | 项 | 预估 | 时点 |
 |---|---|---|---|
 | ① 测试前 | ING-01 ✅、ING-02 ✅、QA-01 ✅ | ~2h | 全部完成（QA-01 于 2026-10-25 修复，含单测；历史 README 数字仍是旧口径，复测前不要混用） |
-| ② 本周 | TST-01(至少 contextLoads+ingest 回归 ✅ ingest 已有单测)、DAT-01 ✅(启动 warmup+ChunkStore 落 PG 已根治)、CFG-01 | ~ 天 | DAT-01 已提前完成 |
+| ② 本周 | TST-01(contextLoads ✅ 2026-10-25 已补，web 层 MockMvc 仍缺)、DAT-01 ✅(启动 warmup+ChunkStore 落 PG 已根治)、CFG-01 | ~ 天 | 2026-10-25：TST-01 的 contextLoads 由一次真实启动环事故促成 |
 | ③ 第 4 周 M1 收尾 | OBS-01、RES-01、RES-02、SEC-01、TST-02、PRO-01 ✅、README/D7 | ~1.5 天 | 挂 GitHub 前 |
-| ④ 与阶段 2 合并做 | AGT-01 ✅、AGT-02 ✅、API-02、PRO-02 ✅（kb-agent 已作为 MCP Client 消费方落地）、AGT-03 | 融入第 5-7 周 | 2026-10-25：④ 的 Agent 化三项已交付，剩 API-02 与 AGT-03（查询改写/self-RAG + 评测 diff） |
+| ④ 与阶段 2 合并做 | AGT-01 ✅、AGT-02 ✅、API-02、PRO-02 ✅（kb-agent 已作为 MCP Client 消费方落地，**双进程实连 tools/list + tools/call 已实测**）、AGT-03 | 融入第 5-7 周 | 2026-10-25：④ 的 Agent 化三项已交付并实跑验收，剩 API-02 与 AGT-03（查询改写/self-RAG + 评测 diff，均需真 key） |
 | ⑤ 话术层（不实现） | SEC-03、SCA-01/02、DAT-02/03、AGT-04 | 笔记 | 第 11-12 周系统设计准备 |
 
 ## F. 启动测试注意事项（2026-10-17 更新：ING-01/02 与 DAT-01 已修复，原绕行条款废弃）

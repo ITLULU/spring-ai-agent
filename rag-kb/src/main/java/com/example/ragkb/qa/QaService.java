@@ -13,6 +13,7 @@ import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
 
@@ -56,7 +57,12 @@ public class QaService {
     @Value("${rag.retrieval.min-vector-similarity:0.30}")
     private double minVectorSimilarity;
 
-    public QaService(HybridRetrievalService retrieval, ChatClient kbChatClient,
+    /**
+     * kbChatClient 必须 @Lazy：ChatClient.builder() 在构造 kbChatClient 时就解引用
+     * ChatModel 代理，而 openAiChatModel 那条链（toolCallingManager → provider →
+     * RagKbTools）会回指本 Bean，两边都延迟到首次真正调用才解析才成环不成。
+     */
+    public QaService(HybridRetrievalService retrieval, @Lazy ChatClient kbChatClient,
                      ChatMemory chatMemory,
                      @Value("classpath:prompts/qa-system.st") Resource systemTemplate) {
         this.retrieval = retrieval;

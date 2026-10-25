@@ -289,6 +289,37 @@ class TicketWorkflowTest {
         assertTrue(anyNote(t.id(), "放弃重试: attempts=3 已达上限 3"));
     }
 
+    /**
+     * 上面那条测的是"人工点了重试"，本条测"没人点"。
+     * 双进程实跑（rag-kb:8000 + kb-agent:8001，无 key → 每次调用 401）抓到的坑：
+     * findRetryable 的 attempts < max 让最后一轮失败之后没有任何驱动者会再碰这单，
+     * 于是它带着 next_retry_at 一直躺在 FAILED，"重试耗尽转人工"这条承诺在自动链路上落空。
+     * 这里用真 workflow + 真 RetryScheduler 跑一遍扫描，把自动链路的那条路径钉住。
+     */
+    @Test
+    void sweepAloneHandsExhaustedTicketsToHumanWithoutAnyoneClickingRetry() {
+        Ticket t = repo.insert("打印机", "打印机脱机了", "it_support", "P2");
+        for (int i = 0; i < 3; i++) {
+            repo.recordFailure(t.id(), "mcp down", System.currentTimeMillis() - 1);
+        }
+        RetryScheduler scheduler = new RetryScheduler(repo, workflow);
+        ReflectionTestUtils.setField(scheduler, "enabled", true);
+        ReflectionTestUtils.setField(scheduler, "maxAttempts", 3);
+
+        scheduler.scan();
+
+        Ticket after = repo.findById(t.id()).orElseThrow();
+        assertEquals(TicketStatus.PENDING_HUMAN, after.status(),
+                "扫描一轮就要把耗尽单送到人工面前，否则它等于从队列里消失了");
+        assertEquals("RETRY_EXHAUSTED", after.resolvedBy());
+        verify(brain, never()).classify(anyString(), anyString());
+        assertTrue(anyNote(t.id(), "放弃重试: attempts=3 已达上限 3"));
+
+        scheduler.scan();
+        assertEquals(TicketStatus.PENDING_HUMAN, repo.findById(t.id()).orElseThrow().status(),
+                "交完人工就不再被捞：状态即去重标记，重复扫描幂等");
+    }
+
     @Test
     void onlyFailedTicketsAreRetryable() {
         Ticket t = repo.insert("门禁", "卡丢了", null, null);

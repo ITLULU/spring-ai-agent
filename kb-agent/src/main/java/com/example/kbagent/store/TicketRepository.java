@@ -59,11 +59,25 @@ public class TicketRepository {
                         TICKET_MAPPER, status.name(), limit);
     }
 
-    /** 退避到期、还能再试的失败单（调度器的唯一取数入口，走 idx_ticket_retry） */
+    /** 退避到期、还能再试的失败单（调度器重试取数入口，走 idx_ticket_retry） */
     public List<Ticket> findRetryable(long now, int maxAttempts, int limit) {
         return jdbc.query("""
                 SELECT * FROM ticket WHERE status = 'FAILED' AND next_retry_at > 0
                   AND next_retry_at <= ? AND attempts < ? ORDER BY next_retry_at
+                FETCH FIRST ? ROWS ONLY""",
+                TICKET_MAPPER, now, maxAttempts, limit);
+    }
+
+    /**
+     * 退避已到期、但次数已用尽的失败单——findRetryable 的 {@code attempts < ?} 会把它们
+     * 永久排除在外，于是"放弃重试转人工"这一步在自动链路上根本跑不到（实测：单会一直躺在
+     * FAILED，直到有人手动点重试）。调度器的第二轮扫描专门捞这批，交人工的决策仍在
+     * TicketWorkflow#retry 里做，这里只负责取数。
+     */
+    public List<Ticket> findAbandonable(long now, int maxAttempts, int limit) {
+        return jdbc.query("""
+                SELECT * FROM ticket WHERE status = 'FAILED' AND next_retry_at > 0
+                  AND next_retry_at <= ? AND attempts >= ? ORDER BY next_retry_at
                 FETCH FIRST ? ROWS ONLY""",
                 TICKET_MAPPER, now, maxAttempts, limit);
     }

@@ -47,12 +47,17 @@ public class AgentChatConfig {
     }
 
     /**
-     * @Lazy ChatModel：MCP Server 的 ToolCallbackProvider 链会回指 openAiChatModel
-     * （openAiChatModel → toolCallingManager → toolCallbackResolver → provider →
-     * RagKbTools → QaService → 本 Bean），在注入点断开成环——builder 只持有代理引用，
-     * 首次真正调用时才解析真实 Bean，功能不阉割。
+     * 断环要断两处，光在 ChatModel 注入点写 @Lazy 不够（2026-10-25 实测：进程直接起不来，
+     * 环是 qaService → kbChatClient → openAiChatModel → toolCallingManager →
+     * toolCallbackResolver → ragKbToolCallbackProvider → ragKbTools → qaService）：
+     * ① {@code ChatClient.builder(chatModel)} 在**构建期就会摸**代理（读默认 options），
+     *    于是代理提前解析、环在此刻闭合；
+     * ② 所以本 Bean 也要 @Lazy（容器不主动实例化），并且 QaService 的注入点同样 @Lazy
+     *    ——拿到的是 ChatClient 代理，第一次真正 prompt() 时才建实例，那时上下文已全部就绪，
+     *    openAiChatModel 的回指链不再构成创建期环。
      */
     @Bean
+    @Lazy
     public ChatClient kbChatClient(@Lazy ChatModel chatModel) {
         return ChatClient.builder(chatModel).build();
     }

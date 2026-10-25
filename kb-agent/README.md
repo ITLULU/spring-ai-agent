@@ -125,13 +125,38 @@ curl -s localhost:8001/api/tickets/<id>            # 工单现场 + 逐节点审
 | --- | --- | --- |
 | 状态机与转移表 | `TicketStatusTest` 6 项 | ✅ 已过 |
 | H2 存储、CAS、退避取数、轨迹排序 | `TicketRepositoryTest` 8 项（真 H2 + 真 schema.sql，不用 mock） | ✅ 已过 |
-| 五节点流水线、置信闸门、红线、引用判据、重试/退避、HITL、并发让路 | `TicketWorkflowTest` 16 项（真 H2 + 桩模型/桩 MCP） | ✅ 已过 |
+| 五节点流水线、置信闸门、红线、引用判据、重试/退避、HITL、并发让路、**耗尽自动交人工** | `TicketWorkflowTest` 17 项（真 H2 + 桩模型/桩 MCP） | ✅ 已过 |
 | 结构化输出解析、提示词渲染、工具挂载、多轮隔离 | `TicketBrainTest` 5 项（桩 ChatModel） | ✅ 已过 |
-| 进程启动、REST 契约、失败记账 | `MCP_CLIENT_ENABLED=false` 实启：`Started in 1.7s`；受理单后 `FAILED/attempts=1/nextRetryAt>0` 且轨迹含"处理失败"；`/retry` 后 attempts=2；REJECT 用在 FAILED 上 409；decision 非法 400；未知工单 404 | ✅ 已实测 |
-| 全仓回归 | `mvn -B test`：content-agent 4 + rag-kb 48 + kb-agent 35 = **87 项全绿** | ✅ 已过 |
-| **真实 LLM 下的分诊/装配质量** | 本机 agent 环境无 `AI_API_KEY`（上面那次 401 就是证据） | ⚠️ **未验证**，需带 key 跑 `http/ticket-agent.http` |
-| **kb-agent → rag-kb 的 MCP 实连** | 需要 rag-kb 同时在跑 | ⚠️ **未验证**，`capabilities` 里 `kbAvailable=true` 且 `mcpTools` 非空即通 |
-| 自动结单率 / 拒答率等统计 | 需要 ≥30 张真实工单 | ⚠️ 未测 |
+| MCP 取数、载荷兼容（纯 JSON / 双重引号 textual）、错误包装 | `KbMcpGatewayTest` 7 项 | ✅ 已过 |
+| 重试调度两路取数（retryDue / abandonExhausted）与开关 | `RetrySchedulerTest` 6 项 | ✅ 已过 |
+| 装配层：闸门参数真从 yml 绑定、自证端点、400/404/409 | `KbAgentApplicationContextTest` 6 项 | ✅ 已过 |
+| **默认 datasource（H2 file）真的建了表** | `KbAgentFileModeSchemaTest` 1 项 | ✅ 已过（修复前默认配置根本不建表，见下） |
+| **双进程实连 + 全生命周期实跑** | rag-kb:8000 + kb-agent:8001 真启：`tools/list` 拿到 10 个工具、`kbAvailable=true`；工单实跑 attempts 1→2→3（2s/4s/8s 退避如期）、**扫描自动** `RETRY_EXHAUSTED` 转人工；APPROVE→`AUTO_RESOLVED/HUMAN`、重复批准 409 带 from→to、未知单 404；重启进程后历史单仍在 | ✅ 已实测 |
+| 全仓回归 | `mvn -B test`：content-agent 4 + rag-kb 52 + kb-agent 56 = **112 项全绿** | ✅ 已过 |
+| 真实 LLM 下的分诊/装配质量、自动结单率 | 工具链已跑通到模型 provider（实跑拿回的就是 `HTTP 401 Incorrect API key`），本机 agent 环境无 `AI_API_KEY` | ⚠️ **未验证**，需带 key 跑 `http/ticket-agent.http` |
+
+### 实跑抓到的三个坑（2026-10-25，单测全绿拦不住）
+
+这三条共同说明了为什么"54 项单测过了"不等于"能跑"——它们的共同点是**只有真容器/真进程才会暴露**：
+
+1. **默认配置根本不建表**。datasource 用 `jdbc:h2:file:`，而 `spring.sql.init.mode` 的默认值
+   `embedded` 只认 `jdbc:h2:mem:` 前缀 → schema.sql 被跳过 → 进程启动正常、自证端点正常，
+   但 POST 工单 500「Table "TICKET" not found」，README 的"clone 即跑"直接破产。
+   修复：`sql.init.mode: always`（schema.sql 全是 `IF NOT EXISTS`，重跑幂等）+ 一条刻意用
+   file URL 起上下文的测试。
+2. **"重试耗尽转人工"在自动链路上落空**。`findRetryable` 带 `attempts < 上限`，所以最后一次失败
+   之后没有任何驱动者会再碰这单，它带着过期的 `next_retry_at` 一直躺在 FAILED——
+   那条兜底备注只有人工手动点 `/retry` 才拿得到（单测里我正是手工调 `workflow.retry` 才"通过"的）。
+   修复：调度器每轮再扫一次 `findAbandonable`，判定仍在 `TicketWorkflow#retry`，转成 PENDING_HUMAN
+   后自然不再被捞（幂等）；实跑同时把修复前躺着的单子也救回来了。
+3. **非法流转冒成 500**。`IllegalTransitionException` 继承 `RuntimeException`，而 Controller 只
+   catch `IllegalStateException`，于是"非法转移→409"这句写在注释里的承诺在 HTTP 层没兑现，
+   复核的人分不清是自己重复点了还是别人抢了单。修复：类级 `@ExceptionHandler` → 409 且把
+   `from→to` 与合法目标原样带回。
+
+rag-kb 侧同源教训：AGT-01 把 `QaService` 改成注入 `ChatClient` 后 48 项单测全绿但**进程起不来**
+（`ChatClient.builder()` 在构建期解引用 `@Lazy ChatModel` 代理，把工具回调环重新闭合）。
+现在两边各有一条 `*ApplicationContextTest` 兜这类回归，见排查清单 SCA/AGT-01 与 TST-01 条目。
 
 ---
 
@@ -146,6 +171,11 @@ curl -s localhost:8001/api/tickets/<id>            # 工单现场 + 逐节点审
 5. **`kb_ingest` 侧的写操作没挂到 agentic 工具里**：自由问答允许模型读、不允许它改库。
 6. **重试只覆盖工具/模型层异常**：业务判定不通过（低置信）走 PENDING_HUMAN，不进重试通道——
    这是设计，不是遗漏。
+7. **耗尽交人工有最长一个"末轮退避 + 扫描间隔"的延迟**（默认 8s + 5s）：驱动者只在到期后捞，
+   换来的是"重启不丢计划"。要即时就把 `retry-scan-interval-ms` 调小，代价是空转扫描变多。
+8. **人工驳回后的自动重跑沿用同一 `attempts` 计数**：已耗尽的单被驳回后只有"一轮机会"，
+   再失败会立刻回到 PENDING_HUMAN，而不是重新排三次退避。计数是审计事实不清零，
+   但这个语义要写出来——否则运营会以为"驳回 = 重置额度"。
 
 ---
 
