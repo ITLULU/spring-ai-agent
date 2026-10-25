@@ -73,7 +73,12 @@ AUTO_RESOLVED ──► PENDING_HUMAN   追问/抽检拉回人工；Agent 不能
 `并发让路`，**不计入失败、不烧重试额度**）。
 
 重试：`base × 2^(attempts-1)` 封顶 60s，退避时间点落库（`next_retry_at`）而不是内存里，
-重启不丢；`RetryScheduler` 每 5s 扫一次到期单。
+重启不丢；`RetryScheduler` 每 5s 扫一次，**每轮两路取数**：
+`retryDue`（到期且 `attempts < 上限` → 占位 RETRYING 重跑②③④⑤）与
+`abandonExhausted`（到期且 `attempts ≥ 上限` → 交 `workflow.retry` 判耗尽并转
+`PENDING_HUMAN/RETRY_EXHAUSTED`）。第二路不是冗余：少了它，烧光额度的单会带着过期的
+`next_retry_at` 永远躺在 FAILED，"耗尽转人工"只剩手动点 `/retry` 才成立（实跑抓到的坑，见下）。
+两路各自限量 20 张/轮，积压时不会一次把模型配额烧光；转成 PENDING_HUMAN 后自然不再被捞，重复扫描幂等。
 
 ---
 
@@ -103,11 +108,16 @@ starter 启动时完成 `initialize → tools/list`，把 rag-kb 的 10 个工�
 
 ```bash
 export JAVA_HOME=<JDK 21>
-# 1) 先起阶段 1（需要真实模型 key）
-cd rag-kb && mvn -B spring-boot:run
-# 2) 再起本模块
-cd ../kb-agent && mvn -B spring-boot:run     # :8001，工单落 ./data/kb-agent/tickets.mv.db
+# 1) 先起阶段 1：启动本身不需要 key（只在真正调模型/算 embedding 时才要）
+cd rag-kb && mvn -B spring-boot:run            # :8000，MCP Server 在 /mcp
+# 2) 再起本模块（默认就连 http://localhost:8000/mcp，MCP_CLIENT_ENABLED=false 可脱开跑）
+cd ../kb-agent && mvn -B spring-boot:run       # :8001，工单落 ./data/kb-agent/tickets.mv.db
 ```
+
+**没有 key 也能验到哪一步**（2026-10-25 就是这么验的）：MCP 握手与 `tools/list`（10 个工具）、
+`tools/call` 真打到服务端、工单受理→失败记账→2s/4s/8s 退避→耗尽自动转 `PENDING_HUMAN`、
+人工 APPROVE/REJECT、409/404/400 边界、重启后历史单仍在。
+只有"答得对不对"（分诊质量、引用是否真支撑、自动结单率）必须带 key 才有意义。
 
 演示脚本：[http/ticket-agent.http](http/ticket-agent.http)（受理 → 看轨迹 → 审核 → 追问 → 自检）。
 
