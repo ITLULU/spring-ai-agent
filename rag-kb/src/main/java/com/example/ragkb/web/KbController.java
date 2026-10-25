@@ -4,6 +4,8 @@ import java.util.List;
 import java.util.Map;
 
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -18,6 +20,8 @@ import com.example.ragkb.ingest.IngestService;
 import com.example.ragkb.qa.QaService;
 import com.example.ragkb.qa.QueryResponse;
 import com.example.ragkb.retrieval.HybridRetrievalService;
+
+import reactor.core.publisher.Flux;
 
 /**
  * 演示/评测用 API。
@@ -103,6 +107,20 @@ public class KbController {
     public QueryResponse query(@RequestBody QueryRequest req) {
         requireQuestion(req);
         return qaService.answer(req.question(), req.conversationId());
+    }
+
+    /**
+     * API-02 · 流式问答（SSE）：{@code meta → delta* → done}，模型侧异常收成一条 {@code error}。
+     *
+     * 用 POST 而不是 GET：问题常含换行与引号，塞 query string 要两头编码还得担心长度上限，
+     * 而企业聊天 UI 本来就是 POST 一条消息体。{@code produces=text/event-stream} 让
+     * curl -N 与前端 EventSource/fetch 流式解析都能直接消费。
+     * 引用清单在 meta 里先给，done 里带 citationValid —— "边流式边校验"落在这两个事件上。
+     */
+    @PostMapping(value = "/query/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public Flux<ServerSentEvent<String>> queryStream(@RequestBody QueryRequest req) {
+        requireQuestion(req);
+        return qaService.answerStream(req.question(), req.conversationId());
     }
 
     /**

@@ -97,6 +97,30 @@ Markdown 报告由 `GET /api/eval/runs/{runId}/report` 从 JSONL 渲染——这
 }
 ```
 
+`POST /api/query/stream`（API-02，SSE）——同一个问题的流式形态（事件名与字段结构真实，数值示意）。
+引用清单在 `meta` 里先到，所以 UI 可以先挂脚注再逐字渲染；`done` 的字段与上面那份 JSON 一一对应，
+两条路径不会长出两套口径：
+
+```
+event:meta
+data:{"refused":false,"citationCount":1,"citations":[{"no":1,"chunkId":"3f2a…","source":"attendance_policy.md","snippet":"员工入职满 1 年享有 5 天带薪年假…"}]}
+
+event:delta
+data:{"text":"入职满 3 年"}
+
+event:delta
+data:{"text":"享有 10 天带薪年假 [1]。"}
+
+event:done
+data:{"refused":false,"citationValid":true,"elapsedMs":2841,"retrievalMs":412,"promptTokens":512,"completionTokens":63,"answer":"入职满 3 年享有 10 天带薪年假 [1]。"}
+```
+
+> 实测（2026-10-25，本机无 key）：`curl -N` 拿到 `HTTP/1.1 200` + `Content-Type: text/event-stream`，
+> 模型侧 401 时收到的是一条 `event:error`（含 type/message）而不是断流——200 头已经发出去，
+> 状态码改不了，只能把失败讲清楚。**`error` ≠ `refused`**：故障走 error，
+> 只有"检索成功但分数低于阈值"或"模型按提示词拒答"才是 refused，
+> 把故障当拒答会让监控看不见真实故障率。
+
 超出文档范围的问题触发检索层拒答（不调 LLM，`citations` 为空、token 为 0）：
 
 ```json
@@ -528,7 +552,7 @@ docker compose --profile rerank up -d     # 追加 CPU 版 rerank（8087）
 >    本体跑的（20/40 候选整批返回 + 死端口反向验证降级），可复现命令写在那份 README 里。
 > 3. 顺带一条环境坑：`mvn -o` 在这台机器上对 rag-kb 会报 `present, but unavailable`，
 >    那是 Maven 3.10 的 `_remote.repositories` 归属校验、**不是缺依赖**（本地仓由 settings.xml 指到
->    `/Users/a/m2/repository`，不在 `~/.m2`），联网走阿里镜像即可 `mvn -B test`（rag-kb 模块 52 项全绿，
+>    `/Users/a/m2/repository`，不在 `~/.m2`），联网走阿里镜像即可 `mvn -B test`（rag-kb 模块 58 项全绿，
 >    含 2026-10-25 补的 `RagKbApplicationContextTest`：真容器 refresh、10 个 MCP 工具、会话窗口裁剪）。
 
 > 已有统一托管基建的机器（按服务拆目录的自建 compose）可不启本文件，用
@@ -630,5 +654,5 @@ rag-kb/
 - [x] ChunkStore 落库（Postgres）+ 启动 warmup（DAT-01 已根治，见"持久化部署"节）；十万级演进路线见 `docs/评测机增强实施方案.md` §8
 - [ ] 评测集扩到 100 条（反向出题法，见 `QaCase` 注释；现 36 题：主集 26 + held-out 10，含 10 道对抗题）
 - [ ] RAGAS 指标对照：用 Python RAGAS 跑同一测试集，校准自建 Judge
-- [x] MCP 传输切 Streamable HTTP（PRO-01，2026-10 完成：protocol=STREAMABLE，探针实测 tools/list 10 工具 + tools/call 真执行）；ChatClient/ChatMemory 化（AGT-01/02，2026-10-25 完成：`AgentChatConfig` + `prompts/qa-system.st` 外置 + `/api/query` 可选 `conversationId` + `/api/session/*`，`QaServiceAgentTest` 7 项锁行为）
+- [x] MCP 传输切 Streamable HTTP（PRO-01，2026-10 完成：protocol=STREAMABLE，探针实测 tools/list 10 工具 + tools/call 真执行）；ChatClient/ChatMemory 化（AGT-01/02，2026-10-25 完成：`AgentChatConfig` + `prompts/qa-system.st` 外置 + `/api/query` 可选 `conversationId` + `/api/session/*`，`QaServiceAgentTest` 7 项锁行为）；流式问答（API-02，2026-10-25 完成：`POST /api/query/stream` SSE `meta→delta*→done`，异常收 `error` 事件，`QaServiceStreamTest` 6 项 + 实跑验证 200/text-event-stream 与 error 事件）；引用后验判据统一到 `QueryResponse#citationValid()`（评测/同步/流式三处共用）；启动装配回归由 `RagKbApplicationContextTest` 兜（AGT-01 之后曾出现"单测全绿但进程起不来"的 ChatClient 环）
 - [x] 把本系统封装成工具接入 Agent 生态（MCP Server 见"MCP 专题"节；**阶段 2 消费侧已落地**：新模块 [`kb-agent`](../kb-agent/README.md) 以 `spring-ai-starter-mcp-client` 连 `/mcp`，工单流水线调 `kb_query`/`kb_retrieve`，rag-kb 侧零改动——PRO-02 关闭）

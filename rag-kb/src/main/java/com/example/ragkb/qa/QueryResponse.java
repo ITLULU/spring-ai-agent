@@ -1,6 +1,8 @@
 package com.example.ragkb.qa;
 
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * 对外问答响应。refused=true 表示触发拒答；citations 为引用溯源列表。
@@ -27,6 +29,35 @@ public record QueryResponse(
      * 不存在"提示词让模型输出 A、代码在比 B"的双口径漂移。
      */
     public static final String REFUSAL = "无法回答";
+
+    /** 答案里的引用标记：[1]、[2]… */
+    private static final Pattern CITE = Pattern.compile("\\[(\\d+)]");
+
+    /**
+     * 引用后验（幻觉治理的第一道机器校验）：非拒答的答案必须至少带一个 [n]，
+     * 且所有编号都落在本次给出的引用清单范围内。
+     * <p>拒答在这里算 <b>true</b>——它是评测口径"这条回答没有引用问题"，
+     * 不是"这条回答可以放行"。阶段 2 的 kb-agent 把同样的判据用作自动结单闸门时
+     * 拒答记 false（闸门要的是"能不能自己结单"），两处语义不同是刻意的，不要互相"修正"。
+     */
+    public boolean citationValid() {
+        if (refused || answer == null) {
+            return true;
+        }
+        if (citations.isEmpty()) {
+            return false;
+        }
+        Matcher m = CITE.matcher(answer);
+        boolean any = false;
+        while (m.find()) {
+            any = true;
+            int n = Integer.parseInt(m.group(1));
+            if (n < 1 || n > citations.size()) {
+                return false;
+            }
+        }
+        return any;
+    }
 
     /**
      * 一条可回查的引用：no 对应提示词里的 [n]，chunkId 可回 ChunkStore 取完整原文，

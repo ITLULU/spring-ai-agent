@@ -94,3 +94,62 @@ Content-Type: application/json
 {
   "question": "公司的股票期权归属计划（Vesting）是怎么安排的？"
 }
+
+### ------------------------------------------------------------
+### 2b. /api/query/stream — 流式问答（API-02，SSE）
+###     IDEA 的 HTTP Client 会把事件逐条打印；命令行用 curl -N 看实时到达：
+###       curl -N -X POST localhost:8000/api/query/stream \
+###            -H 'Content-Type: application/json' -d '{"question":"员工年假有多少天？"}'
+###     事件序列 meta → delta* → done：meta 先到（引用清单，UI 可直接挂脚注），
+###     done 的字段与 /api/query 的响应一一对应（refused/citationValid/elapsedMs/retrievalMs/tokens）。
+###     模型或检索侧故障时收到的是一条 event:error（含 type/message）而不是断流——
+###     200 + text/event-stream 头已经发出去，状态码改不了，只能把失败讲清楚。
+###     注意 error ≠ refused：只有检索成功但分数低于阈值、或模型按提示词拒答，才是 refused。
+### ------------------------------------------------------------
+
+### 2b.1 流式正常路径（期望 meta 里 citationCount>0，done 里 citationValid=true）
+POST {{host}}/api/query/stream
+Content-Type: application/json
+Accept: text/event-stream
+
+{
+  "question": "员工年假有多少天？请病假需要什么流程？"
+}
+
+### 2b.2 流式 + 多轮：同一个 conversationId，第二句用指代（期望能看到上一轮答案被注入）
+POST {{host}}/api/query/stream
+Content-Type: application/json
+Accept: text/event-stream
+
+{
+  "question": "员工年假有多少天？",
+  "conversationId": "sse-demo"
+}
+
+###
+
+POST {{host}}/api/query/stream
+Content-Type: application/json
+Accept: text/event-stream
+
+{
+  "question": "那满 5 年呢？",
+  "conversationId": "sse-demo"
+}
+
+### 2b.3 流式拒答：库里没有的内容（期望 meta.refused=true，且不产生任何模型调用）
+POST {{host}}/api/query/stream
+Content-Type: application/json
+Accept: text/event-stream
+
+{
+  "question": "公司的股票期权归属计划（Vesting）是怎么安排的？"
+}
+
+### 2b.4 边界：空问题 → 400（流式端点与同步端点同一套入参校验）
+POST {{host}}/api/query/stream
+Content-Type: application/json
+
+{
+  "question": "   "
+}

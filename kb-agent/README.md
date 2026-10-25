@@ -132,7 +132,7 @@ curl -s localhost:8001/api/tickets/<id>            # 工单现场 + 逐节点审
 | 装配层：闸门参数真从 yml 绑定、自证端点、400/404/409 | `KbAgentApplicationContextTest` 6 项 | ✅ 已过 |
 | **默认 datasource（H2 file）真的建了表** | `KbAgentFileModeSchemaTest` 1 项 | ✅ 已过（修复前默认配置根本不建表，见下） |
 | **双进程实连 + 全生命周期实跑** | rag-kb:8000 + kb-agent:8001 真启：`tools/list` 拿到 10 个工具、`kbAvailable=true`；工单实跑 attempts 1→2→3（2s/4s/8s 退避如期）、**扫描自动** `RETRY_EXHAUSTED` 转人工；APPROVE→`AUTO_RESOLVED/HUMAN`、重复批准 409 带 from→to、未知单 404；重启进程后历史单仍在 | ✅ 已实测 |
-| 全仓回归 | `mvn -B test`：content-agent 4 + rag-kb 52 + kb-agent 56 = **112 项全绿** | ✅ 已过 |
+| 全仓回归 | `mvn -B test`：content-agent 4 + rag-kb 58 + kb-agent 56 = **118 项全绿** | ✅ 已过 |
 | 真实 LLM 下的分诊/装配质量、自动结单率 | 工具链已跑通到模型 provider（实跑拿回的就是 `HTTP 401 Incorrect API key`），本机 agent 环境无 `AI_API_KEY` | ⚠️ **未验证**，需带 key 跑 `http/ticket-agent.http` |
 
 ### 实跑抓到的三个坑（2026-10-25，单测全绿拦不住）

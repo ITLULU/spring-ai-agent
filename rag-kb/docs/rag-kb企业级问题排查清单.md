@@ -152,9 +152,27 @@
 - [ ] 待处理
 
 #### 🟡 API-02 · 无流式输出端点
-- **现状**：全部同步阻塞；`ChatModel.stream()`/SSE 业务端点缺失（MCP 传输的 SSE ≠ 回答流式）
-- **目标**：`GET/POST /api/query/stream` 返回 `Flux<String>`；企业聊天 UI 标配，也是"为什么 RAG 要流式+引用如何边流式边校验"的面试素材
-- [ ] 待处理
+- **现状**：~~全部同步阻塞~~ 已补 `POST /api/query/stream`（SSE）
+- **修复实现（2026-10-25）**：`QaService#answerStream` 返回 `Flux<ServerSentEvent<String>>`，
+  事件序列 `meta → delta* → done`，异常收成一条 `error`。刻意不做成裸 `Flux<String>`：
+  本项目答案的价值在"引用可校验"，所以 `meta` 先把引用清单发出去（UI 可直接挂脚注），
+  `done` 再带 `refused / citationValid / retrievalMs / elapsedMs / promptTokens / completionTokens`
+  ——字段与同步 `/api/query` 的 `QueryResponse` 一一对应，两条路径不会长出两套口径。
+  三条纪律：① 防线 1 在开流前跑完（拒答不花一个 token，也不让客户端先看到半句真话）；
+  ② 记忆仍按请求挂 `MessageChatMemoryAdvisor`（实测流式一轮只落 user+assistant 各一条，
+  advisor 在流完成时自己写，服务端不再补写，否则窗口里会出现重复轮次）；
+  ③ 阻塞检索放 `Schedulers.boundedElastic()`，不占 servlet 容器线程。
+  顺带把引用后验从 `EvalService` 私有方法提到 `QueryResponse#citationValid()`，
+  评测、同步、流式三处共用同一判据。
+- **已实测**：`curl -N` 拿到 `HTTP/1.1 200` + `Content-Type: text/event-stream`；
+  本机无 key 时 embedding 调用 401 → 客户端收到一条 `event:error`（含 type 与 message），
+  而不是连接悄悄断掉——这正是"200 头已经发出去之后没法再改状态码"的处置方式；
+  空问题仍 400。`QaServiceStreamTest` 6 项锁 meta/delta/done 顺序、拒答短路、
+  越界引用判无效、error 事件、窗口只写一轮、空 conversationId 无状态。
+- **注意口径**：`error` ≠ `refused`。检索/模型侧故障（如 embedding 401、向量库不可达）走 `error`，
+  只有"检索成功但最佳分低于阈值"或"模型按提示词拒答"才是 `refused`——
+  把故障当拒答会让监控看不见真实故障率。
+- [x] 已修复（happy path 的 meta/delta/done 需带 key 复验，本机无 key 只实测到 error 事件）
 
 #### 🟡 API-03 · 无 API 版本与查询参数校验
 - **现状**：`/api/*` 无版本前缀；question/path 空值未校验（`@Valid`/`@NotBlank` 零使用）
@@ -279,7 +297,7 @@
 | ① 测试前 | ING-01 ✅、ING-02 ✅、QA-01 ✅ | ~2h | 全部完成（QA-01 于 2026-10-25 修复，含单测；历史 README 数字仍是旧口径，复测前不要混用） |
 | ② 本周 | TST-01(contextLoads ✅ 2026-10-25 已补，web 层 MockMvc 仍缺)、DAT-01 ✅(启动 warmup+ChunkStore 落 PG 已根治)、CFG-01 | ~ 天 | 2026-10-25：TST-01 的 contextLoads 由一次真实启动环事故促成 |
 | ③ 第 4 周 M1 收尾 | OBS-01、RES-01、RES-02、SEC-01、TST-02、PRO-01 ✅、README/D7 | ~1.5 天 | 挂 GitHub 前 |
-| ④ 与阶段 2 合并做 | AGT-01 ✅、AGT-02 ✅、API-02、PRO-02 ✅（kb-agent 已作为 MCP Client 消费方落地，**双进程实连 tools/list + tools/call 已实测**）、AGT-03 | 融入第 5-7 周 | 2026-10-25：④ 的 Agent 化三项已交付并实跑验收，剩 API-02 与 AGT-03（查询改写/self-RAG + 评测 diff，均需真 key） |
+| ④ 与阶段 2 合并做 | AGT-01 ✅、AGT-02 ✅、API-02 ✅（`/api/query/stream` SSE，2026-10-25）、PRO-02 ✅（kb-agent 已作为 MCP Client 消费方落地，**双进程实连 tools/list + tools/call 已实测**）、AGT-03 | 融入第 5-7 周 | 2026-10-25：④ 只剩 AGT-03（查询改写/self-RAG + 评测 diff，需真 key） |
 | ⑤ 话术层（不实现） | SEC-03、SCA-01/02、DAT-02/03、AGT-04 | 笔记 | 第 11-12 周系统设计准备 |
 
 ## F. 启动测试注意事项（2026-10-17 更新：ING-01/02 与 DAT-01 已修复，原绕行条款废弃）

@@ -12,8 +12,6 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
@@ -38,7 +36,6 @@ import com.example.ragkb.retrieval.RetrievedChunk;
 public class EvalService {
 
     private static final Logger log = LoggerFactory.getLogger(EvalService.class);
-    private static final Pattern CITE = Pattern.compile("\\[(\\d+)]");
     private static final int SMOKE_SIZE = 20;
 
     private final QaService qaService;
@@ -308,7 +305,7 @@ public class EvalService {
             };
         }
 
-        boolean citationValid = checkCitations(resp);
+        boolean citationValid = resp.citationValid();
         String layer = FailureAnalyzer.analyze(c, evidenceHit, resp.refused(), judgeVerdict, citationValid);
 
         store.appendCase(runId, new CaseResult(CaseResult.TYPE, c.caseId(), c.category(),
@@ -317,26 +314,6 @@ public class EvalService {
                 System.currentTimeMillis() - t0,
                 new CaseResult.TokenUsage(resp.promptTokens(), resp.completionTokens(),
                         judgePrompt, judgeCompletion)));
-    }
-
-    /** 引用后验检查：非拒答必须有引用，且 [n] 不越界（幻觉治理第一道机器校验） */
-    private boolean checkCitations(QueryResponse resp) {
-        if (resp.refused() || resp.answer() == null) {
-            return true;
-        }
-        if (resp.citations().isEmpty()) {
-            return false;
-        }
-        Matcher m = CITE.matcher(resp.answer());
-        boolean any = false;
-        while (m.find()) {
-            any = true;
-            int n = Integer.parseInt(m.group(1));
-            if (n < 1 || n > resp.citations().size()) {
-                return false;
-            }
-        }
-        return any;
     }
 
     // ---------------------------------------------------------------- 查询
